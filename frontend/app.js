@@ -51,6 +51,10 @@ async function detectBackend() {
     backendDetected = true;
     log('info', '✅ Local backend detected', { url: CONFIG.LOCAL_BACKEND });
     showBackendStatus('local');
+
+    // Check if Twilio is configured
+    await checkTwilioConfiguration();
+
     return true;
   } catch (error) {
     log('warn', 'Local backend not available', { error: error.message });
@@ -81,6 +85,27 @@ async function detectBackend() {
   log('error', '❌ No backend detected');
   showBackendStatus('none');
   return false;
+}
+
+// Check if Twilio is configured
+async function checkTwilioConfiguration() {
+  try {
+    const response = await fetch(`${CONFIG.BACKEND_URL}/health`);
+    const data = await response.json();
+
+    const setupNotice = document.getElementById('setup-wizard-notice');
+    if (setupNotice) {
+      if (data.twilio_configured === false) {
+        setupNotice.style.display = 'block';
+        log('warn', 'Twilio not configured - showing setup wizard notice');
+      } else {
+        setupNotice.style.display = 'none';
+        log('info', 'Twilio is configured');
+      }
+    }
+  } catch (error) {
+    log('warn', 'Could not check Twilio configuration', { error: error.message });
+  }
 }
 
 // Show backend status in UI

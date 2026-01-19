@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Twilio Setup Wizard - Callback Platform</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    .wizard-container {
+      max-width: 800px;
+      margin: 40px auto;
+      padding: 20px;
+    }
+    
+    .wizard-step {
+      display: none;
+      animation: fadeIn 0.3s ease-in;
+    }
+    
+    .wizard-step.active {
+      display: block;
+    }
+    
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    
+    .step-indicator {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 40px;
+      position: relative;
+    }
+    
+    .step-indicator::before {
+      content: '';
+      position: absolute;
+      top: 20px;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: #e0e0e0;
+      z-index: -1;
+    }
+    
+    .step-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      flex: 1;
+      position: relative;
+    }
+    
+    .step-number {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: #e0e0e0;
+      color: #666;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+      margin-bottom: 8px;
+      transition: all 0.3s ease;
+    }
+    
+    .step-item.active .step-number {
+      background: var(--primary-color, #007bff);
+      color: white;
+    }
+    
+    .step-item.completed .step-number {
+      background: var(--success-color, #28a745);
+      color: white;
+    }
+    
+    .step-label {
+      font-size: 12px;
+      text-align: center;
+      color: #666;
+    }
+    
+    .wizard-content {
+      background: white;
+      padding: 40px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      min-height: 400px;
+    }
+    
+    .wizard-actions {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 30px;
+      padding-top: 20px;
+      border-top: 1px solid #e0e0e0;
+    }
+    
+    .btn-wizard {
+      padding: 12px 24px;
+      border: none;
+      border-radius: 4px;
+      font-size: 16px;
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+    
+    .btn-primary {
+      background: var(--primary-color, #007bff);
+      color: white;
+    }
+    
+    .btn-primary:hover {
+      background: #0056b3;
+    }
+    
+    .btn-secondary {
+      background: #6c757d;
+      color: white;
+    }
+    
+    .btn-secondary:hover {
+      background: #545b62;
+    }
+    
+    .credential-input {
+      width: 100%;
+      padding: 12px;
+      margin: 8px 0;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 14px;
+      font-family: monospace;
+    }
+    
+    .help-box {
+      background: #f8f9fa;
+      border-left: 4px solid var(--primary-color, #007bff);
+      padding: 16px;
+      margin: 20px 0;
+      border-radius: 4px;
+    }
+    
+    .external-link {
+      display: inline-block;
+      margin: 10px 0;
+      padding: 12px 20px;
+      background: var(--primary-color, #007bff);
+      color: white;
+      text-decoration: none;
+      border-radius: 4px;
+      transition: all 0.3s ease;
+    }
+    
+    .external-link:hover {
+      background: #0056b3;
+      transform: translateY(-2px);
+    }
+  </style>
+</head>
+<body>
+  <div class="wizard-container">
+    <h1>🚀 Twilio Setup Wizard</h1>
+    <p>Let's get your callback platform configured in 6 easy steps!</p>
+
+    <!-- Step Indicator -->
+    <div class="step-indicator">
+      <div class="step-item active" data-step="1">
+        <div class="step-number">1</div>
+        <div class="step-label">Welcome</div>
+      </div>
+      <div class="step-item" data-step="2">
+        <div class="step-number">2</div>
+        <div class="step-label">Create Account</div>
+      </div>
+      <div class="step-item" data-step="3">
+        <div class="step-number">3</div>
+        <div class="step-label">Get Credentials</div>
+      </div>
+      <div class="step-item" data-step="4">
+        <div class="step-number">4</div>
+        <div class="step-label">Get Phone Number</div>
+      </div>
+      <div class="step-item" data-step="5">
+        <div class="step-number">5</div>
+        <div class="step-label">Verify Number</div>
+      </div>
+      <div class="step-item" data-step="6">
+        <div class="step-number">6</div>
+        <div class="step-label">Configure</div>
+      </div>
+    </div>
+
+    <!-- Wizard Content -->
+    <div class="wizard-content">
+
+      <!-- Step 1: Welcome -->
+      <div class="wizard-step active" data-step="1">
+        <h2>Welcome to the Callback Platform Setup!</h2>
+        <p>This wizard will guide you through setting up Twilio to enable real phone callbacks.</p>
+
+        <div class="help-box">
+          <h3>📋 What You'll Need:</h3>
+          <ul>
+            <li>✅ Email address (for Twilio account)</li>
+            <li>✅ Phone number (for verification)</li>
+            <li>✅ Credit card (optional - free trial available)</li>
+            <li>✅ 10-15 minutes of your time</li>
+          </ul>
+        </div>
+
+        <div class="help-box">
+          <h3>💰 Twilio Free Trial:</h3>
+          <ul>
+            <li>$15.50 in free credit</li>
+            <li>1 free phone number</li>
+            <li>Can call/SMS verified numbers only</li>
+            <li>Includes "trial account" message in calls</li>
+          </ul>
+        </div>
+
+        <p><strong>Ready to get started?</strong> Click "Next" to begin!</p>
+      </div>
+
+      <!-- Step 2: Create Twilio Account -->
+      <div class="wizard-step" data-step="2">
+        <h2>Step 1: Create Your Twilio Account</h2>
+        <p>First, you'll need to create a free Twilio account.</p>
+
+        <div class="help-box">
+          <h3>📝 Instructions:</h3>
+          <ol>
+            <li>Click the button below to open Twilio signup in a new tab</li>
+            <li>Fill in your email, password, and phone number</li>
+            <li>Verify your phone number with the code they send</li>
+            <li>Complete the signup process</li>
+            <li>Come back here and click "Next"</li>
+          </ol>
+        </div>
+
+        <a href="https://www.twilio.com/try-twilio" target="_blank" class="external-link">
+          🔗 Open Twilio Signup (New Tab)
+        </a>
+
+        <div class="help-box" style="margin-top: 20px;">
+          <p><strong>✅ Already have a Twilio account?</strong> Great! Just click "Next" to continue.</p>
+        </div>
+      </div>
+
+      <!-- Step 3: Get Credentials -->
+      <div class="wizard-step" data-step="3">
+        <h2>Step 2: Get Your Account Credentials</h2>
+        <p>Now let's get your Account SID and Auth Token from the Twilio Console.</p>
+
+        <div class="help-box">
+          <h3>📝 Instructions:</h3>
+          <ol>
+            <li>Click the button below to open Twilio Console</li>
+            <li>Look for the "Account Info" section on the dashboard</li>
+            <li>Copy your <strong>Account SID</strong> (starts with "AC")</li>
+            <li>Click "Show" next to Auth Token and copy it</li>
+            <li>Paste both values in the fields below</li>
+          </ol>
+        </div>
+
+        <a href="https://console.twilio.com/" target="_blank" class="external-link">
+          🔗 Open Twilio Console (New Tab)
+        </a>
+
+        <div style="margin-top: 30px;">
+          <label for="twilioSid"><strong>Account SID:</strong></label>
+          <input type="text" id="twilioSid" class="credential-input" placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
+
+          <label for="twilioAuthToken" style="margin-top: 20px; display: block;"><strong>Auth Token:</strong></label>
+          <input type="password" id="twilioAuthToken" class="credential-input" placeholder="Your auth token here" />
+
+          <label style="margin-top: 10px; display: block;">
+            <input type="checkbox" id="showAuthToken" /> Show Auth Token
+          </label>
+        </div>
+      </div>
+
+      <!-- Step 4: Get Phone Number -->
+      <div class="wizard-step" data-step="4">
+        <h2>Step 3: Get a Twilio Phone Number</h2>
+        <p>You need a Twilio phone number to make outbound calls.</p>
+
+        <div class="help-box">
+          <h3>📝 Instructions:</h3>
+          <ol>
+            <li>Click the button below to open Phone Numbers page</li>
+            <li>Click "Buy a number" or "Get a number"</li>
+            <li>Select country (United States recommended)</li>
+            <li>Check "Voice" capability (required)</li>
+            <li>Check "SMS" capability (optional, for fallback)</li>
+            <li>Click "Search" and choose a number</li>
+            <li>Click "Buy" (free on trial account)</li>
+            <li>Copy your new number and paste it below</li>
+          </ol>
+        </div>
+
+        <a href="https://console.twilio.com/us1/develop/phone-numbers/manage/incoming" target="_blank" class="external-link">
+          🔗 Get Twilio Phone Number (New Tab)
+        </a>
+
+        <div style="margin-top: 30px;">
+          <label for="twilioNumber"><strong>Twilio Phone Number:</strong></label>
+          <input type="tel" id="twilioNumber" class="credential-input" placeholder="+15551234567" />
+          <small style="color: #666;">Format: +1XXXXXXXXXX (include country code)</small>
+        </div>
+      </div>
+
+      <!-- Step 5: Verify Your Phone Number -->
+      <div class="wizard-step" data-step="5">
+        <h2>Step 4: Verify Your Personal Phone Number</h2>
+        <p><strong>Important:</strong> On a free trial, Twilio can only call numbers you've verified.</p>
+
+        <div class="help-box">
+          <h3>📝 Instructions:</h3>
+          <ol>
+            <li>Click the button below to open Verified Numbers page</li>
+            <li>Click "Add a new number" or "Verify a number"</li>
+            <li>Enter <strong>your personal phone number</strong> (where you want to receive callbacks)</li>
+            <li>Choose verification method: Call or SMS</li>
+            <li>Enter the verification code you receive</li>
+            <li>✅ Your number is now verified!</li>
+            <li>Copy your verified number and paste it below</li>
+          </ol>
+        </div>
+
+        <a href="https://console.twilio.com/us1/develop/phone-numbers/manage/verified" target="_blank" class="external-link">
+          🔗 Verify Your Phone Number (New Tab)
+        </a>
+
+        <div style="margin-top: 30px;">
+          <label for="businessNumber"><strong>Your Business Phone Number (Verified):</strong></label>
+          <input type="tel" id="businessNumber" class="credential-input" placeholder="+15557654321" />
+          <small style="color: #666;">This is YOUR phone number that will receive callback requests</small>
+        </div>
+      </div>
+
+      <!-- Step 6: Save Configuration -->
+      <div class="wizard-step" data-step="6">
+        <h2>Step 5: Review & Save Configuration</h2>
+        <p>Almost done! Let's review your configuration before saving.</p>
+
+        <div class="help-box">
+          <h3>📋 Configuration Summary:</h3>
+          <table style="width: 100%; margin-top: 15px;">
+            <tr>
+              <td style="padding: 8px; font-weight: bold;">Account SID:</td>
+              <td style="padding: 8px; font-family: monospace;" id="reviewSid">-</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; font-weight: bold;">Auth Token:</td>
+              <td style="padding: 8px; font-family: monospace;" id="reviewAuthToken">••••••••••••••••</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; font-weight: bold;">Twilio Number:</td>
+              <td style="padding: 8px; font-family: monospace;" id="reviewTwilioNumber">-</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; font-weight: bold;">Business Number:</td>
+              <td style="padding: 8px; font-family: monospace;" id="reviewBusinessNumber">-</td>
+            </tr>
+          </table>
+        </div>
+
+        <div class="help-box" style="background: #fff3cd; border-left-color: #ffc107;">
+          <h3>⚠️ Important Notes:</h3>
+          <ul>
+            <li>These credentials will be saved to a <code>.env</code> file on your server</li>
+            <li>They will NOT be committed to git (protected by .gitignore)</li>
+            <li>Keep your Auth Token secret - never share it publicly</li>
+            <li>You can change these settings later by editing the .env file</li>
+          </ul>
+        </div>
+
+        <div id="saveStatus" style="margin-top: 20px;"></div>
+      </div>
+
+      <!-- Wizard Actions -->
+      <div class="wizard-actions">
+        <button type="button" class="btn-wizard btn-secondary" id="prevBtn" style="display: none;">
+          ← Previous
+        </button>
+        <div></div>
+        <button type="button" class="btn-wizard btn-primary" id="nextBtn">
+          Next →
+        </button>
+      </div>
+
+    </div>
+  </div>
+
+  <script src="setup.js"></script>
+</body>
+</html>
+
