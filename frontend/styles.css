@@ -323,6 +323,12 @@ input.autofilled {
   animation: slideIn 0.3s ease-out;
 }
 
+.backend-status.status-checking {
+  background-color: #fff3cd;
+  border-left: 4px solid #ffc107;
+  color: #856404;
+}
+
 .backend-status.status-success {
   background-color: #d4edda;
   border-left: 4px solid var(--success-color);

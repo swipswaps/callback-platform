@@ -29,6 +29,7 @@ function log(level, message, data = {}) {
 // Backend detection function
 async function detectBackend() {
   log('info', 'Starting backend detection...');
+  showBackendStatus('checking');
 
   // Try local backend first (use no-cors for detection)
   try {
@@ -88,9 +89,14 @@ function showBackendStatus(status) {
   if (!statusContainer) return;
 
   const statusMessages = {
+    'checking': {
+      icon: '🔄',
+      text: 'Checking backend connection...',
+      class: 'status-checking'
+    },
     'local': {
       icon: '🟢',
-      text: 'Connected to local backend',
+      text: 'Connected to local backend (http://localhost:8501)',
       class: 'status-success'
     },
     'deployed': {
@@ -100,7 +106,7 @@ function showBackendStatus(status) {
     },
     'none': {
       icon: '🔴',
-      text: 'Backend not available - Please start the backend server',
+      text: 'Backend not available - Form submissions will fail',
       class: 'status-error'
     }
   };
@@ -110,11 +116,14 @@ function showBackendStatus(status) {
     <div class="backend-status ${msg.class}">
       <span class="status-icon">${msg.icon}</span>
       <span class="status-text">${msg.text}</span>
-      ${status === 'none' ? '<button onclick="detectBackend()" class="retry-btn">Retry</button>' : ''}
+      ${status === 'none' ? '<button onclick="window.detectBackend()" class="retry-btn">Retry Connection</button>' : ''}
     </div>
   `;
   statusContainer.style.display = 'block';
 }
+
+// Make detectBackend available globally for retry button
+window.detectBackend = detectBackend;
 
 // Social login handlers
 document.querySelectorAll(".social-btn").forEach(btn => {
