@@ -1,0 +1,51 @@
+version: "3.9"
+
+services:
+  backend:
+    build: ./backend
+    container_name: callback-backend
+    ports:
+      - "8501:8501"
+    environment:
+      # Twilio Configuration
+      # IMPORTANT: Replace these with your actual Twilio credentials
+      - TWILIO_SID=${TWILIO_SID:-your_twilio_account_sid}
+      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN:-your_twilio_auth_token}
+      - TWILIO_NUMBER=${TWILIO_NUMBER:-+15551234567}
+      
+      # Business Configuration
+      - BUSINESS_NUMBER=${BUSINESS_NUMBER:-+15557654321}
+      
+      # Frontend URL (for OAuth redirects)
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000}
+      
+      # Database path (inside container)
+      - DATABASE_PATH=/app/data/callbacks.db
+    
+    volumes:
+      # Persist database and logs
+      - callback-data:/app/data
+      - callback-logs:/tmp
+    
+    restart: unless-stopped
+    
+    networks:
+      - callback-network
+    
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8501/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  callback-data:
+    driver: local
+  callback-logs:
+    driver: local
+
+networks:
+  callback-network:
+    driver: bridge
+

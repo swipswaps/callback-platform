@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="description" content="Request a callback - Connect instantly with our team"/>
+  <title>Request a Callback</title>
+  <link rel="stylesheet" href="styles.css"/>
+  <!-- Google reCAPTCHA v2 -->
+  <script src="https://www.google.com/recaptcha/api.js" async defer></script>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Request a Callback</h1>
+      <p class="subtitle">Connect with us instantly - we'll call you back</p>
+    </header>
+
+    <div class="social-login">
+      <h3>Quick Sign-In (Optional)</h3>
+      <p class="helper-text">Auto-fill your details using:</p>
+      <div class="social-buttons">
+        <button class="social-btn google" data-provider="google">
+          <span class="icon">G</span> Google
+        </button>
+        <button class="social-btn facebook" data-provider="facebook">
+          <span class="icon">f</span> Facebook
+        </button>
+        <button class="social-btn instagram" data-provider="instagram">
+          <span class="icon">📷</span> Instagram
+        </button>
+        <button class="social-btn x" data-provider="x">
+          <span class="icon">𝕏</span> X.com
+        </button>
+        <button class="social-btn whatsapp" data-provider="whatsapp">
+          <span class="icon">📱</span> WhatsApp
+        </button>
+      </div>
+    </div>
+
+    <div class="divider">
+      <span>OR</span>
+    </div>
+
+    <form id="callbackForm">
+      <div class="form-group">
+        <label for="name">Full Name</label>
+        <input 
+          type="text" 
+          id="name" 
+          name="name"
+          placeholder="John Doe" 
+          autocomplete="name"
+        />
+      </div>
+
+      <div class="form-group">
+        <label for="email">Email Address</label>
+        <input 
+          type="email" 
+          id="email" 
+          name="email"
+          placeholder="john@example.com" 
+          autocomplete="email"
+        />
+      </div>
+
+      <div class="form-group">
+        <label for="phone">Phone Number <span class="required">*</span></label>
+        <input 
+          type="tel" 
+          id="phone" 
+          name="phone"
+          placeholder="+1 (555) 123-4567" 
+          required 
+          autocomplete="tel"
+          pattern="[\+]?[0-9\s\-\(\)]+"
+        />
+        <small class="help-text">Include country code for international numbers</small>
+      </div>
+
+      <!-- Google reCAPTCHA v2 widget -->
+      <div class="captcha-container">
+        <div class="g-recaptcha" data-sitekey="6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI"></div>
+        <small class="help-text">This site is protected by reCAPTCHA</small>
+      </div>
+
+      <button type="submit" class="submit-btn">
+        📞 Request Callback Now
+      </button>
+    </form>
+
+    <div id="status" class="status-message" role="status" aria-live="polite"></div>
+
+    <footer class="info-section">
+      <h4>How It Works</h4>
+      <ol>
+        <li>Enter your phone number above</li>
+        <li>We call you first to verify</li>
+        <li>Once you answer, we connect you to our team</li>
+        <li>If we miss your call, you'll receive an SMS</li>
+      </ol>
+      <p class="privacy-note">
+        🔒 Your privacy matters. We never share your information. 
+        Calls are not recorded by default.
+      </p>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
+
