@@ -5,28 +5,35 @@ description: "Mandatory rules for all AI assistant interactions - workflow patte
 
 # Mandatory Rules for AI Assistant Interactions
 
-Version: 6.0 (User-Mandated Command Authority)
+Version: 6.1 (GitHub CLI Integration)
 Status: Authoritative
 Scope: Overrides all default assistant behavior
 
-**CRITICAL UPDATES IN v6.0:**
+**CRITICAL UPDATES IN v6.1:**
+- **Rule 54: NEW - GitHub CLI Usage (🟠 CRITICAL)**
+- **Rule 55: NEW - Git Operations Safety (🟠 CRITICAL)**
+- **Rule 56: NEW - Repository Initialization Best Practices (🟡 MAJOR)**
+- **Compliance Audit: ENHANCED - Added GitHub CLI check**
+- Informed by GitHub CLI best practices, modern git workflows, and "If it can be typed, it MUST be scripted" principle
+- Addresses manual web UI instructions when CLI can automate
+- Establishes git safety patterns for destructive operations
+- Documents modern repository initialization (main branch, .gitignore first)
+
+**WHAT v6.1 SOLVES:**
+- LLMs providing manual web UI steps when `gh` CLI can automate
+- LLMs suggesting destructive git operations without permission
+- LLMs using outdated `master` branch naming
+- LLMs committing before creating .gitignore
+- LLMs providing vague commit messages
+- Pattern: "Go to GitHub and click..." instead of `gh` command
+
+**PREVIOUS UPDATES (v6.0 - User-Mandated Command Authority):**
 - **Rule 52: NEW - User-Mandated Command Authority (🔴 HARD STOP)**
 - **Rule 53: NEW - Clarification Prohibition on Explicit Statements (🔴 HARD STOP)**
 - **Rule 10: ENHANCED - User constraints become immutable rules once stated**
 - **Rule 5: ENHANCED - Clarification forbidden after user makes explicit statement**
 - **Rule 29: ENHANCED - Standard service commands with full flags**
-- Informed by production debugging patterns, Streamlit official docs, and user-established workflows
 - Addresses persistent erosion of rule authority by treating user commands as optional
-- Addresses Rule 5 misuse (re-asking after explicit statements)
-- Establishes command immutability once user defines standard command
-
-**WHAT v6.0 SOLVES:**
-- LLMs omitting user-mandated flags/options from commands
-- LLMs offering alternatives after user explicitly stated the correct approach
-- LLMs treating user-established workflows as suggestions rather than requirements
-- LLMs misusing Rule 5 to re-ask questions already answered
-- LLMs providing incomplete commands that violate Rule 25 (logging)
-- LLMs providing incomplete commands that violate Rule 40 (runtime verification)
 - Pattern: User says "the correct command is X" → LLM asks "should I use X?"
 
 ============================================================
@@ -1045,6 +1052,242 @@ This is valid because it asks about PERMISSION (Rule 29-A), not about WHAT COMMA
 - Works with Rule 52 (user-mandated command authority)
 
 ============================================================
+RULE 54 — GitHub CLI Usage 🟠 (NEW v6.1)
+============================================================
+
+**When GitHub operations are needed, use `gh` CLI instead of manual web instructions.**
+
+This is a user-defined constraint that overrides defaults per Rule 10.
+
+**REQUIRED for GitHub operations:**
+
+Use GitHub CLI (`gh`) for:
+- Creating repositories
+- Enabling GitHub Pages
+- Managing repository settings
+- Creating releases
+- Managing issues/PRs
+- Configuring repository features
+
+**FORBIDDEN:**
+
+❌ Telling user to "Go to GitHub web UI and click..."
+❌ Providing manual web-based instructions when `gh` can do it
+❌ Multi-step web UI workflows that can be one command
+
+**REQUIRED workflow:**
+
+1. Check if `gh` is installed: `gh --version`
+2. Check if authenticated: `gh auth status`
+3. If not authenticated, guide user: `gh auth login`
+4. Use `gh` commands for operations
+
+**Common GitHub operations with `gh`:**
+
+| Operation | Command |
+|-----------|---------|
+| Create repo | `gh repo create NAME --public/--private` |
+| Enable Pages | `gh api repos/:owner/:repo/pages -X POST -f source[branch]=main` |
+| Create release | `gh release create v1.0.0` |
+| View repo | `gh repo view --web` |
+| Set description | `gh repo edit --description "..."` |
+| Add topics | `gh repo edit --add-topic topic1,topic2` |
+
+**Example - CORRECT (v6.1):**
+
+```
+I'll enable GitHub Pages using the GitHub CLI.
+
+First, let me check if gh is installed:
+$ gh --version
+
+Then enable Pages:
+$ gh api repos/$(gh repo view --json nameWithOwner -q .nameWithOwner)/pages \
+  -X POST \
+  -f "source[branch]=main" \
+  -f "source[path]=/"
+```
+
+**Example - WRONG (Rule 54 violation):**
+
+```
+To enable GitHub Pages:
+1. Go to your repository on GitHub
+2. Click Settings
+3. Click Pages in the sidebar
+4. Select main branch
+5. Click Save
+```
+
+Violation: Provided manual web UI steps when `gh` CLI can do it in one command.
+
+**Authentication check pattern:**
+
+```bash
+# Check if gh is installed and authenticated
+if ! command -v gh &> /dev/null; then
+    echo "GitHub CLI not installed. Install: https://cli.github.com/"
+    exit 1
+fi
+
+if ! gh auth status &> /dev/null; then
+    echo "Not authenticated. Run: gh auth login"
+    exit 1
+fi
+
+# Proceed with gh commands
+gh repo create ...
+```
+
+**Cross-reference:**
+- Works with Rule 10 (user constraints override)
+- Works with Rule 52 (user-mandated command authority)
+- Works with "If it can be typed, it MUST be scripted" principle
+
+============================================================
+RULE 55 — Git Operations Safety 🟠 (NEW v6.1)
+============================================================
+
+**Git operations require explicit user permission for destructive actions.**
+
+**FORBIDDEN without explicit permission:**
+
+❌ `git push --force` or `git push -f`
+❌ `git reset --hard` (loses uncommitted changes)
+❌ `git clean -fd` (deletes untracked files)
+❌ `git rebase` on shared branches
+❌ `git commit --amend` on pushed commits
+❌ Deleting branches that exist on remote
+❌ Pushing to `main`, `master`, or `production` branches
+
+**REQUIRED for safe git operations:**
+
+✅ Always check git status before operations
+✅ Show user what will be committed before committing
+✅ Use `git push --dry-run` to preview push
+✅ Ask permission before force operations
+✅ Verify remote URL before first push
+✅ Check branch name before pushing
+
+**Safe git workflow pattern:**
+
+```bash
+# 1. Check status
+git status
+
+# 2. Show what will be committed
+git diff --cached
+
+# 3. Commit with descriptive message
+git commit -m "descriptive message"
+
+# 4. Verify remote (first time)
+git remote -v
+
+# 5. Dry-run push
+git push --dry-run
+
+# 6. Actual push (only after verification)
+git push
+```
+
+**Required permission format for destructive operations:**
+
+```
+CLARIFICATION NEEDED:
+- Situation: Need to force push to fix history
+- Risk: Will overwrite remote branch
+- Command: git push --force origin main
+- Question: May I proceed with force push?
+```
+
+**Cross-reference:**
+- Works with Rule 5 (ask for destructive actions)
+- Works with Rule 24 (test before push)
+- Works with Rule 29-A (user-owned process protection)
+
+============================================================
+RULE 56 — Repository Initialization Best Practices 🟡 (NEW v6.1)
+============================================================
+
+**When initializing git repositories, follow modern best practices.**
+
+**REQUIRED initialization pattern:**
+
+```bash
+# 1. Initialize with main branch (not master)
+git init -b main
+
+# OR rename if already initialized
+git branch -m main
+
+# 2. Add .gitignore BEFORE first commit
+# (prevents accidentally committing secrets)
+
+# 3. Verify .gitignore is working
+git status  # Should not show .env, *.log, etc.
+
+# 4. First commit should be clean
+git add .
+git commit -m "Initial commit: [brief description]"
+
+# 5. Verify commit
+git log --oneline -1
+git show --stat HEAD
+```
+
+**FORBIDDEN:**
+
+❌ Using `master` as default branch name
+❌ Committing before creating .gitignore
+❌ Committing secrets (.env files, API keys)
+❌ Vague commit messages ("initial commit", "updates", "fixes")
+❌ Committing without verifying what's staged
+
+**Required .gitignore patterns:**
+
+Always include:
+- `.env`, `.env.local`, `.env.production`
+- `*.log`
+- `__pycache__/`, `*.pyc`
+- `node_modules/`
+- `.DS_Store`, `Thumbs.db`
+- IDE files (`.vscode/`, `.idea/`)
+- Database files (`*.db`, `*.sqlite`)
+
+**Commit message format:**
+
+```
+<type>: <subject>
+
+<body (optional)>
+
+<footer (optional)>
+```
+
+Types: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`
+
+**Example - CORRECT:**
+
+```
+feat: Add callback platform with 6 security layers
+
+- Business-first callback system
+- Twilio integration with signature verification
+- Google reCAPTCHA v2
+- Rate limiting and phone validation
+- Business hours check
+- Comprehensive automation suite
+
+Includes 5 automation scripts (35.6KB) and full documentation.
+```
+
+**Cross-reference:**
+- Works with Rule 0 (capture before/after state)
+- Works with Rule 2 (evidence before assertion)
+- Works with Rule 24 (test before push)
+
+============================================================
 FINAL STEP — Compliance Self-Audit 🔴
 ============================================================
 
@@ -1058,12 +1301,31 @@ COMPLIANCE AUDIT:
 - Task complete: YES/NO
 - User-mandated commands used: YES/NO/N/A (v6.0)
 - Clarification appropriate: YES/NO/N/A (v6.0)
+- GitHub CLI used where applicable: YES/NO/N/A (v6.1)
 
 ============================================================
 VERSION HISTORY
 ============================================================
 
-**v6.0 (Current - USER-MANDATED COMMAND AUTHORITY):**
+**v6.1 (Current - GITHUB CLI INTEGRATION):**
+- **Rule 54: NEW - GitHub CLI Usage (🟠 CRITICAL)**
+- **Rule 55: NEW - Git Operations Safety (🟠 CRITICAL)**
+- **Rule 56: NEW - Repository Initialization Best Practices (🟡 MAJOR)**
+- **Compliance Audit: ENHANCED - Added GitHub CLI check**
+- Informed by GitHub CLI best practices and modern git workflows
+- Addresses manual web UI instructions when CLI can automate
+- Establishes git safety patterns for destructive operations
+- Documents modern repository initialization (main branch, .gitignore first)
+
+**What v6.1 solves:**
+- LLMs providing manual web UI steps when `gh` CLI can automate
+- LLMs suggesting destructive git operations without permission
+- LLMs using outdated `master` branch naming
+- LLMs committing before creating .gitignore
+- LLMs providing vague commit messages
+- Pattern: "Go to GitHub and click..." instead of `gh` command
+
+**v6.0 (USER-MANDATED COMMAND AUTHORITY):**
 - **Rule 52: NEW - User-Mandated Command Authority (🔴 HARD STOP)**
 - **Rule 53: NEW - Clarification Prohibition on Explicit Statements (🔴 HARD STOP)**
 - **Rule 5: ENHANCED - Clarification forbidden after user makes explicit statement**
