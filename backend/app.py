@@ -18,6 +18,7 @@ import base64
 import sqlite3
 import logging
 import uuid
+import requests
 from datetime import datetime
 from flask import Flask, request, redirect, jsonify
 from flask_cors import CORS
@@ -176,18 +177,36 @@ def validate_phone_number(number):
     """
     Validate and format phone number to E.164 format.
 
+    Sanitizes input by removing common formatting characters and defaults to US region
+    if no country code is provided.
+
     Args:
-        number (str): Phone number to validate
+        number (str): Phone number to validate (e.g., "(321) 704-7403", "321-704-7403", "+13217047403")
 
     Returns:
         tuple: (is_valid: bool, result: str) where result is formatted number or error message
     """
     try:
-        parsed = phonenumbers.parse(number, None)
+        # Sanitize input: remove common formatting characters
+        sanitized = number.strip()
+        # Remove parentheses, spaces, dashes, dots
+        sanitized = sanitized.replace('(', '').replace(')', '').replace(' ', '').replace('-', '').replace('.', '')
+
+        # If number doesn't start with +, assume US and prepend +1
+        if not sanitized.startswith('+'):
+            # If it's 10 digits, it's likely a US number without country code
+            if len(sanitized) == 10 and sanitized.isdigit():
+                sanitized = '+1' + sanitized
+            # If it's 11 digits starting with 1, add the +
+            elif len(sanitized) == 11 and sanitized.startswith('1') and sanitized.isdigit():
+                sanitized = '+' + sanitized
+
+        # Parse with US as default region
+        parsed = phonenumbers.parse(sanitized, "US")
         if not phonenumbers.is_valid_number(parsed):
             return False, "Invalid phone number"
         formatted = phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
-        logger.debug(f"Phone number validated: {number} -> {formatted}")
+        logger.debug(f"Phone number validated: {number} -> {sanitized} -> {formatted}")
         return True, formatted
     except phonenumbers.NumberParseException as e:
         logger.warning(f"Phone number parse error: {number} - {str(e)}")
