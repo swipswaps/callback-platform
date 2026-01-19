@@ -30,46 +30,46 @@ function log(level, message, data = {}) {
 async function detectBackend() {
   log('info', 'Starting backend detection...');
 
-  // Try local backend first
+  // Try local backend first (use no-cors for detection)
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), CONFIG.DETECTION_TIMEOUT);
 
-    const response = await fetch(`${CONFIG.LOCAL_BACKEND}/health`, {
-      method: 'GET',
+    // Use no-cors mode - if fetch succeeds (doesn't throw), backend is running
+    await fetch(`${CONFIG.LOCAL_BACKEND}/health`, {
+      method: 'HEAD',
       signal: controller.signal,
-      mode: 'cors'
+      mode: 'no-cors'
     });
 
     clearTimeout(timeoutId);
 
-    if (response.ok) {
-      CONFIG.BACKEND_URL = CONFIG.LOCAL_BACKEND;
-      usingLocalBackend = true;
-      backendDetected = true;
-      log('info', '✅ Local backend detected', { url: CONFIG.LOCAL_BACKEND });
-      showBackendStatus('local');
-      return true;
-    }
+    // If we get here, backend is responding
+    CONFIG.BACKEND_URL = CONFIG.LOCAL_BACKEND;
+    usingLocalBackend = true;
+    backendDetected = true;
+    log('info', '✅ Local backend detected', { url: CONFIG.LOCAL_BACKEND });
+    showBackendStatus('local');
+    return true;
   } catch (error) {
     log('warn', 'Local backend not available', { error: error.message });
   }
 
   // Try deployed backend
   try {
-    const response = await fetch(`${CONFIG.DEPLOYED_BACKEND}/health`, {
-      method: 'GET',
-      mode: 'cors'
+    // Use no-cors mode for detection
+    await fetch(`${CONFIG.DEPLOYED_BACKEND}/health`, {
+      method: 'HEAD',
+      mode: 'no-cors'
     });
 
-    if (response.ok) {
-      CONFIG.BACKEND_URL = CONFIG.DEPLOYED_BACKEND;
-      usingLocalBackend = false;
-      backendDetected = true;
-      log('info', '✅ Deployed backend detected', { url: CONFIG.DEPLOYED_BACKEND });
-      showBackendStatus('deployed');
-      return true;
-    }
+    // If we get here, backend is responding
+    CONFIG.BACKEND_URL = CONFIG.DEPLOYED_BACKEND;
+    usingLocalBackend = false;
+    backendDetected = true;
+    log('info', '✅ Deployed backend detected', { url: CONFIG.DEPLOYED_BACKEND });
+    showBackendStatus('deployed');
+    return true;
   } catch (error) {
     log('error', 'Deployed backend not available', { error: error.message });
   }
