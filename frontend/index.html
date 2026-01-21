@@ -33,33 +33,53 @@
       </a>
     </div>
 
-    <div class="social-login">
-      <h3>Quick Sign-In (Optional)</h3>
-      <p class="helper-text">Auto-fill your details using:</p>
-      <div class="social-buttons">
-        <button class="social-btn google" data-provider="google">
-          <span class="icon">G</span> Google
-        </button>
-        <button class="social-btn facebook" data-provider="facebook">
-          <span class="icon">f</span> Facebook
-        </button>
-        <button class="social-btn instagram" data-provider="instagram">
-          <span class="icon">📷</span> Instagram
-        </button>
-        <button class="social-btn x" data-provider="x">
-          <span class="icon">𝕏</span> X.com
-        </button>
-        <button class="social-btn whatsapp" data-provider="whatsapp">
-          <span class="icon">📱</span> WhatsApp
-        </button>
+    <!-- Authentication Required Section (shown when NOT logged in) -->
+    <div id="auth-required" class="auth-section">
+      <div class="auth-notice">
+        <span class="lock-icon">🔒</span>
+        <h3>Sign In Required</h3>
+        <p>To prevent abuse and ensure quality service, please sign in before requesting a callback.</p>
+      </div>
+
+      <div class="social-login">
+        <h4>Choose your sign-in method:</h4>
+        <div class="social-buttons">
+          <button class="social-btn google" data-provider="google">
+            <span class="icon">G</span> Continue with Google
+          </button>
+          <button class="social-btn facebook" data-provider="facebook">
+            <span class="icon">f</span> Continue with Facebook
+          </button>
+          <button class="social-btn instagram" data-provider="instagram">
+            <span class="icon">📷</span> Continue with Instagram
+          </button>
+          <button class="social-btn x" data-provider="x">
+            <span class="icon">𝕏</span> Continue with X
+          </button>
+        </div>
+      </div>
+
+      <div class="security-notice">
+        <p>🔐 <strong>Why sign in?</strong> This helps us prevent spam and ensures we can reach you if needed.</p>
+        <p>🔒 <strong>Privacy:</strong> We never share your information. Your data is secure.</p>
       </div>
     </div>
 
-    <div class="divider">
-      <span>OR</span>
+    <!-- User Profile (shown when logged in) -->
+    <div id="user-profile" class="user-profile" style="display: none;">
+      <div class="profile-card">
+        <div class="profile-info">
+          <span class="profile-icon">👤</span>
+          <div class="profile-details">
+            <strong id="profile-name">Loading...</strong>
+            <small id="profile-email">Loading...</small>
+          </div>
+        </div>
+        <button id="logout-btn" class="logout-btn">Sign Out</button>
+      </div>
     </div>
 
-    <form id="callbackForm">
+    <form id="callbackForm" style="display: none;">
       <div class="form-group">
         <label for="name">Full Name</label>
         <input 
@@ -84,16 +104,28 @@
 
       <div class="form-group">
         <label for="phone">Phone Number <span class="required">*</span></label>
-        <input 
-          type="tel" 
-          id="phone" 
+        <input
+          type="tel"
+          id="phone"
           name="phone"
-          placeholder="+1 (555) 123-4567" 
-          required 
+          placeholder="+1 (555) 123-4567"
+          required
           autocomplete="tel"
           pattern="[\+]?[0-9\s\-\(\)]+"
         />
         <small class="help-text">Include country code for international numbers</small>
+      </div>
+
+      <!-- Honeypot field - hidden from users, catches bots -->
+      <div class="form-group" style="position: absolute; left: -9999px; opacity: 0; pointer-events: none;" aria-hidden="true">
+        <label for="website">Website (leave blank)</label>
+        <input
+          type="text"
+          id="website"
+          name="website"
+          tabindex="-1"
+          autocomplete="off"
+        />
       </div>
 
       <!-- Google reCAPTCHA v2 widget -->

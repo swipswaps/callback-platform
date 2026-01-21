@@ -13,6 +13,9 @@ const CONFIG = {
 let backendDetected = false;
 let usingLocalBackend = false;
 
+// User session state
+let currentUser = null;
+
 // DOM Elements
 const statusEl = document.getElementById("status");
 const form = document.getElementById("callbackForm");
@@ -329,13 +332,65 @@ form.addEventListener("submit", async (e) => {
   }
 });
 
+// Authentication functions
+function saveUserSession(userData) {
+  sessionStorage.setItem('user', JSON.stringify(userData));
+  currentUser = userData;
+  log('info', 'User session saved', { user: userData.name });
+}
+
+function loadUserSession() {
+  const stored = sessionStorage.getItem('user');
+  if (stored) {
+    try {
+      currentUser = JSON.parse(stored);
+      log('info', 'User session loaded', { user: currentUser.name });
+      return currentUser;
+    } catch (error) {
+      log('error', 'Failed to load user session', { error: error.message });
+      sessionStorage.removeItem('user');
+    }
+  }
+  return null;
+}
+
+function clearUserSession() {
+  sessionStorage.removeItem('user');
+  currentUser = null;
+  log('info', 'User session cleared');
+}
+
+function showAuthenticatedUI() {
+  document.getElementById('auth-required').style.display = 'none';
+  document.getElementById('user-profile').style.display = 'block';
+  document.getElementById('callbackForm').style.display = 'block';
+
+  // Update profile display
+  document.getElementById('profile-name').textContent = currentUser.name || 'User';
+  document.getElementById('profile-email').textContent = currentUser.email || '';
+
+  // Autofill form
+  autofill(currentUser);
+
+  log('info', 'Authenticated UI shown');
+}
+
+function showUnauthenticatedUI() {
+  document.getElementById('auth-required').style.display = 'block';
+  document.getElementById('user-profile').style.display = 'none';
+  document.getElementById('callbackForm').style.display = 'none';
+
+  log('info', 'Unauthenticated UI shown');
+}
+
 // Handle OAuth redirect with user data
 const params = new URLSearchParams(window.location.search);
 if (params.has("user")) {
   try {
     const userData = JSON.parse(atob(params.get("user")));
-    autofill(userData);
-    
+    saveUserSession(userData);
+    showAuthenticatedUI();
+
     // Clean URL without reloading
     window.history.replaceState({}, document.title, window.location.pathname);
   } catch (error) {
@@ -343,14 +398,34 @@ if (params.has("user")) {
   }
 }
 
-// Initialize backend detection on page load
+// Logout handler
+const logoutBtn = document.getElementById('logout-btn');
+if (logoutBtn) {
+  logoutBtn.addEventListener('click', () => {
+    clearUserSession();
+    showUnauthenticatedUI();
+    showStatus('info', 'You have been signed out');
+  });
+}
+
+// Initialize backend detection and auth state on page load
 (async function init() {
   log('info', 'Initializing callback form...');
   await detectBackend();
+
+  // Check for existing session
+  const user = loadUserSession();
+  if (user) {
+    showAuthenticatedUI();
+  } else {
+    showUnauthenticatedUI();
+  }
+
   log('info', 'Callback form initialized', {
     backendUrl: CONFIG.BACKEND_URL,
     backendDetected,
-    usingLocalBackend
+    usingLocalBackend,
+    authenticated: !!currentUser
   });
 })();
 
