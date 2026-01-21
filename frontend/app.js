@@ -372,7 +372,8 @@ function showAuthenticatedUI() {
   // Autofill form
   autofill(currentUser);
 
-  log('info', 'Authenticated UI shown');
+  log('info', '✅ Authenticated UI shown - user can now request callback');
+  log('info', `👤 User: ${currentUser.name} <${currentUser.email}>`);
 }
 
 function showUnauthenticatedUI() {
@@ -380,7 +381,7 @@ function showUnauthenticatedUI() {
   document.getElementById('user-profile').style.display = 'none';
   document.getElementById('callbackForm').style.display = 'none';
 
-  log('info', 'Unauthenticated UI shown');
+  log('info', '🔒 Unauthenticated UI shown - OAuth required');
 }
 
 // Handle OAuth redirect with user data

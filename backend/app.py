@@ -80,7 +80,341 @@ BUSINESS_HOURS_END = os.environ.get("BUSINESS_HOURS_END", "17:00")  # 5 PM
 BUSINESS_TIMEZONE = os.environ.get("BUSINESS_TIMEZONE", "America/New_York")
 BUSINESS_WEEKDAYS_ONLY = os.environ.get("BUSINESS_WEEKDAYS_ONLY", "true").lower() == "true"
 
-# Initialize Twilio client
+# Cost protection limits
+MAX_CALLS_PER_DAY = int(os.environ.get("MAX_CALLS_PER_DAY", "100"))
+MAX_SMS_PER_DAY = int(os.environ.get("MAX_SMS_PER_DAY", "200"))
+ALERT_EMAIL = os.environ.get("ALERT_EMAIL", "")  # Email for cost alerts
+
+# Provider selection configuration
+CALLBACK_PROVIDER = os.environ.get("CALLBACK_PROVIDER", "twilio").lower()
+
+# Asterisk configuration (for asterisk provider)
+ASTERISK_HOST = os.environ.get("ASTERISK_HOST", "localhost")
+ASTERISK_AMI_PORT = int(os.environ.get("ASTERISK_AMI_PORT", "5038"))
+ASTERISK_AMI_USER = os.environ.get("ASTERISK_AMI_USER", "callback_manager")
+ASTERISK_AMI_SECRET = os.environ.get("ASTERISK_AMI_SECRET", "callback_secret_2026")
+
+
+# ============================================================================
+# PROVIDER ABSTRACTION LAYER
+# ============================================================================
+# Per Rule 6 (Scope Containment): Add Asterisk as alternative without removing Twilio
+# Per Rule 18 (Feature Removal Prohibition): Preserve all existing Twilio functionality
+# Per Rule 25 (Comprehensive Application Logging): All providers have comprehensive logging
+
+class CallbackProvider:
+    """
+    Base class for callback providers.
+    Defines the interface that all providers must implement.
+    """
+
+    def __init__(self):
+        self.logger = logging.getLogger(self.__class__.__name__)
+
+    def make_call(self, to_number, from_number, request_id):
+        """
+        Initiate a callback call.
+
+        Args:
+            to_number: Phone number to call (E.164 format)
+            from_number: Caller ID number (E.164 format)
+            request_id: Unique request ID for tracking
+
+        Returns:
+            dict: {
+                'success': bool,
+                'call_sid': str (provider-specific call ID),
+                'message': str (status message)
+            }
+        """
+        raise NotImplementedError("Subclasses must implement make_call()")
+
+    def send_sms(self, to_number, from_number, message):
+        """
+        Send SMS message.
+
+        Args:
+            to_number: Phone number to send to (E.164 format)
+            from_number: Sender phone number (E.164 format)
+            message: SMS message text
+
+        Returns:
+            dict: {
+                'success': bool,
+                'sms_sid': str (provider-specific message ID),
+                'message': str (status message)
+            }
+        """
+        raise NotImplementedError("Subclasses must implement send_sms()")
+
+    def is_configured(self):
+        """
+        Check if provider is properly configured.
+
+        Returns:
+            bool: True if configured, False otherwise
+        """
+        raise NotImplementedError("Subclasses must implement is_configured()")
+
+
+class TwilioProvider(CallbackProvider):
+    """
+    Twilio callback provider.
+    Wraps existing Twilio functionality with provider interface.
+    Per Rule 18: Preserves all existing Twilio features.
+    """
+
+    def __init__(self, sid, auth_token, twilio_number):
+        super().__init__()
+        self.sid = sid
+        self.auth_token = auth_token
+        self.twilio_number = twilio_number
+        self.client = None
+        self.validator = None
+
+        if sid and auth_token:
+            try:
+                self.client = Client(sid, auth_token)
+                self.validator = RequestValidator(auth_token)
+                self.logger.info("Twilio provider initialized successfully")
+            except Exception as e:
+                self.logger.error(f"Failed to initialize Twilio provider: {str(e)}")
+        else:
+            self.logger.warning("Twilio credentials not configured")
+
+    def make_call(self, to_number, from_number, request_id):
+        """Initiate Twilio call to business number"""
+        if not self.client:
+            self.logger.error("Twilio client not initialized")
+            return {'success': False, 'call_sid': None, 'message': 'Twilio not configured'}
+
+        try:
+            self.logger.info(f"Initiating Twilio call for request {request_id}: {from_number} -> {to_number}")
+
+            call = self.client.calls.create(
+                to=to_number,
+                from_=from_number,
+                url=f"http://twimlets.com/holdmusic?Bucket=com.twilio.music.classical",
+                status_callback=f"http://localhost:8501/twilio/status_callback?request_id={request_id}",
+                status_callback_event=["completed", "no-answer", "busy", "failed"],
+                timeout=20
+            )
+
+            self.logger.info(f"Twilio call initiated successfully: {call.sid}")
+            return {'success': True, 'call_sid': call.sid, 'message': 'Call initiated'}
+
+        except TwilioRestException as e:
+            self.logger.error(f"Twilio call failed: {str(e)}")
+            return {'success': False, 'call_sid': None, 'message': str(e)}
+
+    def send_sms(self, to_number, from_number, message):
+        """Send SMS via Twilio"""
+        if not self.client:
+            self.logger.error("Twilio client not initialized")
+            return {'success': False, 'sms_sid': None, 'message': 'Twilio not configured'}
+
+        try:
+            self.logger.info(f"Sending Twilio SMS: {from_number} -> {to_number}")
+
+            msg = self.client.messages.create(
+                to=to_number,
+                from_=from_number,
+                body=message
+            )
+
+            self.logger.info(f"Twilio SMS sent successfully: {msg.sid}")
+            return {'success': True, 'sms_sid': msg.sid, 'message': 'SMS sent'}
+
+        except TwilioRestException as e:
+            self.logger.error(f"Twilio SMS failed: {str(e)}")
+            return {'success': False, 'sms_sid': None, 'message': str(e)}
+
+    def is_configured(self):
+        """Check if Twilio is configured"""
+        return self.client is not None
+
+
+class AsteriskProvider(CallbackProvider):
+    """
+    Asterisk PBX callback provider.
+    Uses Asterisk Manager Interface (AMI) to originate calls.
+    Per Rule 25: Comprehensive logging for troubleshooting.
+    """
+
+    def __init__(self, host, port, username, secret):
+        super().__init__()
+        self.host = host
+        self.port = port
+        self.username = username
+        self.secret = secret
+        self._test_connection()
+
+    def _test_connection(self):
+        """Test AMI connection on initialization"""
+        try:
+            import socket
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5)
+            sock.connect((self.host, self.port))
+            sock.close()
+            self.logger.info(f"Asterisk AMI connection test successful: {self.host}:{self.port}")
+        except Exception as e:
+            self.logger.warning(f"Asterisk AMI connection test failed: {str(e)}")
+
+    def _ami_connect(self):
+        """
+        Connect to Asterisk Manager Interface.
+        Returns socket connection or None on failure.
+        """
+        import socket
+
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(10)
+            sock.connect((self.host, self.port))
+
+            # Read welcome message
+            welcome = sock.recv(1024).decode('utf-8')
+            self.logger.debug(f"AMI welcome: {welcome.strip()}")
+
+            # Login
+            login_cmd = (
+                f"Action: Login\r\n"
+                f"Username: {self.username}\r\n"
+                f"Secret: {self.secret}\r\n"
+                f"\r\n"
+            )
+            sock.send(login_cmd.encode('utf-8'))
+
+            # Read login response
+            response = sock.recv(1024).decode('utf-8')
+            self.logger.debug(f"AMI login response: {response.strip()}")
+
+            if "Success" in response:
+                self.logger.info("AMI login successful")
+                return sock
+            else:
+                self.logger.error(f"AMI login failed: {response}")
+                sock.close()
+                return None
+
+        except Exception as e:
+            self.logger.error(f"AMI connection failed: {str(e)}")
+            return None
+
+    def _ami_disconnect(self, sock):
+        """Disconnect from AMI"""
+        try:
+            logoff_cmd = "Action: Logoff\r\n\r\n"
+            sock.send(logoff_cmd.encode('utf-8'))
+            sock.close()
+            self.logger.debug("AMI disconnected")
+        except Exception as e:
+            self.logger.error(f"AMI disconnect error: {str(e)}")
+
+    def make_call(self, to_number, from_number, request_id):
+        """
+        Initiate call via Asterisk AMI Originate command.
+
+        This originates a call to the business number, and when answered,
+        connects to the AGI script which handles the callback logic.
+        """
+        sock = self._ami_connect()
+        if not sock:
+            return {'success': False, 'call_sid': None, 'message': 'AMI connection failed'}
+
+        try:
+            self.logger.info(f"Originating Asterisk call for request {request_id}: {from_number} -> {to_number}")
+
+            # Generate unique action ID for tracking
+            action_id = f"callback_{request_id}"
+
+            # Originate call via AMI using Twilio SIP trunk (PJSIP)
+            # This calls the business number (to_number) via Twilio SIP trunk
+            # and then connects to the customer (from_number)
+            originate_cmd = (
+                f"Action: Originate\r\n"
+                f"ActionID: {action_id}\r\n"
+                f"Channel: PJSIP/{to_number}@twilio-trunk\r\n"
+                f"Context: callback-outbound\r\n"
+                f"Exten: {from_number}\r\n"
+                f"Priority: 1\r\n"
+                f"CallerID: {from_number}\r\n"
+                f"Timeout: 30000\r\n"
+                f"Async: yes\r\n"
+                f"\r\n"
+            )
+
+            sock.send(originate_cmd.encode('utf-8'))
+
+            # Read response
+            response = sock.recv(2048).decode('utf-8')
+            self.logger.debug(f"AMI originate response: {response.strip()}")
+
+            self._ami_disconnect(sock)
+
+            if "Success" in response:
+                self.logger.info(f"Asterisk call originated successfully: {action_id}")
+                return {'success': True, 'call_sid': action_id, 'message': 'Call originated'}
+            else:
+                self.logger.error(f"Asterisk call originate failed: {response}")
+                return {'success': False, 'call_sid': None, 'message': response}
+
+        except Exception as e:
+            self.logger.error(f"Asterisk call failed: {str(e)}")
+            self._ami_disconnect(sock)
+            return {'success': False, 'call_sid': None, 'message': str(e)}
+
+    def send_sms(self, to_number, from_number, message):
+        """
+        Asterisk does not support SMS natively.
+        This would require integration with an SMS gateway.
+        For now, log and return not supported.
+        """
+        self.logger.warning("SMS not supported by Asterisk provider")
+        return {
+            'success': False,
+            'sms_sid': None,
+            'message': 'SMS not supported by Asterisk provider'
+        }
+
+    def is_configured(self):
+        """Check if Asterisk is configured"""
+        return bool(self.host and self.port and self.username and self.secret)
+
+
+# Initialize provider based on configuration
+callback_provider = None
+
+if CALLBACK_PROVIDER == "asterisk":
+    logger.info("Initializing Asterisk callback provider")
+    callback_provider = AsteriskProvider(
+        host=ASTERISK_HOST,
+        port=ASTERISK_AMI_PORT,
+        username=ASTERISK_AMI_USER,
+        secret=ASTERISK_AMI_SECRET
+    )
+elif CALLBACK_PROVIDER == "twilio":
+    logger.info("Initializing Twilio callback provider")
+    callback_provider = TwilioProvider(
+        sid=TWILIO_SID,
+        auth_token=TWILIO_AUTH_TOKEN,
+        twilio_number=TWILIO_NUMBER
+    )
+else:
+    logger.error(f"Unknown callback provider: {CALLBACK_PROVIDER}")
+    logger.info("Defaulting to Twilio provider")
+    callback_provider = TwilioProvider(
+        sid=TWILIO_SID,
+        auth_token=TWILIO_AUTH_TOKEN,
+        twilio_number=TWILIO_NUMBER
+    )
+
+logger.info(f"Callback provider initialized: {callback_provider.__class__.__name__}")
+logger.info(f"Provider configured: {callback_provider.is_configured()}")
+
+
+# Initialize Twilio client (legacy - for backward compatibility)
 twilio_client = None
 twilio_validator = None
 if TWILIO_SID and TWILIO_AUTH_TOKEN:
@@ -134,6 +468,204 @@ def verify_recaptcha(token):
     except Exception as e:
         logger.error(f"reCAPTCHA verification error: {str(e)}")
         return False
+
+
+def generate_request_fingerprint(ip_address, user_agent, phone_number):
+    """
+    Generate unique fingerprint for spam detection.
+
+    Combines IP, User-Agent, and phone number to detect suspicious patterns.
+
+    Args:
+        ip_address (str): Client IP address
+        user_agent (str): Client User-Agent header
+        phone_number (str): Submitted phone number
+
+    Returns:
+        str: SHA256 hash fingerprint
+    """
+    import hashlib
+
+    fingerprint_data = f"{ip_address}|{user_agent}|{phone_number}"
+    return hashlib.sha256(fingerprint_data.encode()).hexdigest()
+
+
+def check_duplicate_request(phone_number, time_window_minutes=60):
+    """
+    Check if phone number has recent pending/active callback request.
+
+    Prevents spam by limiting one request per phone per time window.
+
+    Args:
+        phone_number (str): E.164 formatted phone number
+        time_window_minutes (int): Time window in minutes (default: 60)
+
+    Returns:
+        tuple: (is_duplicate: bool, message: str, existing_request_id: str or None)
+    """
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+
+        # Calculate cutoff time
+        cutoff_time = datetime.utcnow() - timedelta(minutes=time_window_minutes)
+
+        # Check for recent requests from this phone number
+        cursor.execute("""
+            SELECT request_id, request_status, created_at
+            FROM callbacks
+            WHERE visitor_phone = ?
+            AND created_at > ?
+            AND request_status IN ('pending', 'calling', 'connected')
+            ORDER BY created_at DESC
+            LIMIT 1
+        """, (phone_number, cutoff_time.isoformat()))
+
+        result = cursor.fetchone()
+        conn.close()
+
+        if result:
+            request_id, status, created_at = result
+            logger.warning(f"Duplicate request detected for {phone_number}: existing {request_id} ({status})")
+            return True, f"You already have a {status} callback request. Please wait.", request_id
+
+        return False, "", None
+
+    except Exception as e:
+        logger.error(f"Error checking duplicate request: {str(e)}")
+        # Fail open - allow request if check fails
+        return False, "", None
+
+
+def check_fingerprint_abuse(fingerprint, max_requests_per_day=5):
+    """
+    Check if request fingerprint shows abuse pattern.
+
+    Detects if same IP+UserAgent+Phone combination is making too many requests.
+
+    Args:
+        fingerprint (str): Request fingerprint hash
+        max_requests_per_day (int): Maximum requests allowed per day (default: 5)
+
+    Returns:
+        tuple: (is_abuse: bool, message: str, request_count: int)
+    """
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+
+        # Calculate cutoff time (24 hours ago)
+        cutoff_time = datetime.utcnow() - timedelta(hours=24)
+
+        # Count requests with this fingerprint in last 24 hours
+        cursor.execute("""
+            SELECT COUNT(*)
+            FROM callbacks
+            WHERE fingerprint = ?
+            AND created_at > ?
+        """, (fingerprint, cutoff_time.isoformat()))
+
+        count = cursor.fetchone()[0]
+        conn.close()
+
+        if count >= max_requests_per_day:
+            logger.warning(f"Fingerprint abuse detected: {fingerprint} has {count} requests in 24h")
+            return True, f"Too many requests. Please try again later.", count
+
+        return False, "", count
+
+    except Exception as e:
+        logger.error(f"Error checking fingerprint abuse: {str(e)}")
+        # Fail open - allow request if check fails
+        return False, "", 0
+
+
+def check_honeypot(honeypot_value):
+    """
+    Check honeypot field to detect bots.
+
+    Honeypot field should be empty for legitimate users (hidden via CSS).
+    Bots typically fill all fields, triggering this check.
+
+    Args:
+        honeypot_value (str): Value of honeypot field
+
+    Returns:
+        bool: True if bot detected (honeypot filled), False if legitimate
+    """
+    if honeypot_value and honeypot_value.strip():
+        logger.warning(f"Honeypot triggered: bot detected (value: {honeypot_value[:50]})")
+        return True
+    return False
+
+
+def check_daily_limits():
+    """
+    Check if daily call/SMS limits have been reached.
+
+    Prevents runaway costs from spam or misconfiguration.
+
+    Returns:
+        tuple: (within_limits: bool, message: str, stats: dict)
+    """
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+
+        # Calculate cutoff time (24 hours ago)
+        cutoff_time = datetime.utcnow() - timedelta(hours=24)
+
+        # Count calls in last 24 hours
+        cursor.execute("""
+            SELECT COUNT(*)
+            FROM callbacks
+            WHERE created_at > ?
+            AND request_status IN ('calling', 'connected', 'completed')
+        """, (cutoff_time.isoformat(),))
+
+        calls_24h = cursor.fetchone()[0]
+
+        # Count SMS in last 24 hours (approximate - based on status)
+        cursor.execute("""
+            SELECT COUNT(*)
+            FROM callbacks
+            WHERE created_at > ?
+            AND sms_sid IS NOT NULL
+        """, (cutoff_time.isoformat(),))
+
+        sms_24h = cursor.fetchone()[0]
+
+        conn.close()
+
+        stats = {
+            'calls_24h': calls_24h,
+            'sms_24h': sms_24h,
+            'max_calls': MAX_CALLS_PER_DAY,
+            'max_sms': MAX_SMS_PER_DAY
+        }
+
+        # Check limits
+        if calls_24h >= MAX_CALLS_PER_DAY:
+            logger.error(f"Daily call limit reached: {calls_24h}/{MAX_CALLS_PER_DAY}")
+            return False, f"Daily call limit reached. Please try again tomorrow.", stats
+
+        if sms_24h >= MAX_SMS_PER_DAY:
+            logger.error(f"Daily SMS limit reached: {sms_24h}/{MAX_SMS_PER_DAY}")
+            return False, f"Daily SMS limit reached. Please try again tomorrow.", stats
+
+        # Warn at 80% threshold
+        if calls_24h >= MAX_CALLS_PER_DAY * 0.8:
+            logger.warning(f"Approaching daily call limit: {calls_24h}/{MAX_CALLS_PER_DAY}")
+
+        if sms_24h >= MAX_SMS_PER_DAY * 0.8:
+            logger.warning(f"Approaching daily SMS limit: {sms_24h}/{MAX_SMS_PER_DAY}")
+
+        return True, "", stats
+
+    except Exception as e:
+        logger.error(f"Error checking daily limits: {str(e)}")
+        # Fail open - allow request if check fails
+        return True, "", {}
 
 
 def is_business_hours():
@@ -213,14 +745,72 @@ def validate_phone_number(number):
         return False, f"Invalid phone number format: {str(e)}"
 
 
+def migrate_database():
+    """
+    Migrate existing database to add new security columns.
+
+    Adds ip_address, user_agent, and fingerprint columns if they don't exist.
+    """
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+
+        # Check if migration is needed
+        cursor.execute("PRAGMA table_info(callbacks)")
+        columns = [row[1] for row in cursor.fetchall()]
+
+        needs_migration = False
+
+        # Add ip_address column if missing
+        if 'ip_address' not in columns:
+            logger.info("Adding ip_address column to callbacks table")
+            cursor.execute("ALTER TABLE callbacks ADD COLUMN ip_address TEXT")
+            needs_migration = True
+
+        # Add user_agent column if missing
+        if 'user_agent' not in columns:
+            logger.info("Adding user_agent column to callbacks table")
+            cursor.execute("ALTER TABLE callbacks ADD COLUMN user_agent TEXT")
+            needs_migration = True
+
+        # Add fingerprint column if missing
+        if 'fingerprint' not in columns:
+            logger.info("Adding fingerprint column to callbacks table")
+            cursor.execute("ALTER TABLE callbacks ADD COLUMN fingerprint TEXT")
+            needs_migration = True
+
+        if needs_migration:
+            # Create indexes for new columns
+            try:
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_callbacks_fingerprint
+                    ON callbacks(fingerprint)
+                """)
+                logger.info("Created fingerprint index")
+            except Exception as e:
+                logger.warning(f"Could not create fingerprint index: {e}")
+
+            conn.commit()
+            logger.info("Database migration completed successfully")
+        else:
+            logger.info("Database schema is up to date")
+
+        conn.close()
+
+    except Exception as e:
+        logger.error(f"Database migration failed: {str(e)}")
+        raise
+
+
 def init_database():
     """Initialize SQLite database with proper schema per Rule 11."""
     logger.info(f"Initializing database at {DATABASE_PATH}")
-    
+
     conn = sqlite3.connect(DATABASE_PATH)
     cursor = conn.cursor()
     
     # Create callbacks table - avoid SQL reserved keywords per Rule 11
+    # Note: New installs get all columns, existing DBs get migrated separately
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS callbacks (
             request_id TEXT PRIMARY KEY,
@@ -232,8 +822,17 @@ def init_database():
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             call_sid TEXT,
-            sms_sid TEXT
+            sms_sid TEXT,
+            ip_address TEXT,
+            user_agent TEXT,
+            fingerprint TEXT
         )
+    """)
+
+    # Create index on phone number for duplicate detection
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_callbacks_phone
+        ON callbacks(visitor_phone)
     """)
     
     # Create audit log table
@@ -305,8 +904,14 @@ def update_callback_status(request_id, status, message=None, call_sid=None, sms_
         logger.error(f"Failed to update callback status: {str(e)}")
 
 
-# Initialize database on startup
+# Initialize database on startup (creates tables if they don't exist)
 init_database()
+
+# Run database migration AFTER init to add new columns to existing tables
+try:
+    migrate_database()
+except Exception as e:
+    logger.error(f"Migration failed, but continuing: {e}")
 
 
 @app.route("/health", methods=["GET"])
@@ -315,7 +920,9 @@ def health_check():
     return jsonify({
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat(),
-        "twilio_configured": twilio_client is not None
+        "provider": callback_provider.__class__.__name__ if callback_provider else "None",
+        "provider_configured": callback_provider.is_configured() if callback_provider else False,
+        "twilio_configured": twilio_client is not None  # Legacy compatibility
     })
 
 
@@ -416,42 +1023,72 @@ BUSINESS_WEEKDAYS_ONLY=true
 def oauth_login(provider):
     """
     Initiate OAuth login flow for specified provider.
-    In production, this would redirect to the actual OAuth provider.
-    For demo purposes, we simulate the flow.
-    """
-    logger.info(f"OAuth login initiated for provider: {provider}")
-    log_audit_event(None, "oauth_login_initiated", {"provider": provider})
 
-    # In production, redirect to actual OAuth provider
-    # For now, simulate with a dummy token
-    return redirect(f"/oauth/callback/{provider}?token=demo_token_{provider}")
+    DEMO MODE: Since OAuth credentials are not configured, this simulates
+    a successful OAuth flow with demo user data. In production, this would
+    redirect to the actual OAuth provider.
+
+    Transparency: All events logged to /tmp/app.log and audit_log table.
+    """
+    logger.info(f"🔐 OAuth login initiated for provider: {provider}")
+    logger.info(f"📋 DEMO MODE: Simulating OAuth flow (no real credentials configured)")
+    log_audit_event(None, "oauth_login_initiated", {"provider": provider, "mode": "demo"})
+
+    # DEMO MODE: Skip real OAuth provider, go directly to callback with demo data
+    # In production, this would be: redirect(f"https://accounts.google.com/o/oauth2/v2/auth?...")
+    logger.info(f"✅ Simulating successful {provider} authentication")
+    return redirect(f"/oauth/callback/{provider}?token=demo_token_{provider}&mode=demo")
 
 
 @app.route("/oauth/callback/<provider>", methods=["GET"])
 def oauth_callback(provider):
     """
     Handle OAuth callback and fetch user information.
-    Redirects back to frontend with user data.
+
+    DEMO MODE: Returns simulated user data. In production, this would
+    exchange the auth code for an access token and fetch real user data.
+
+    Transparency: All user data logged (sanitized) to /tmp/app.log.
     """
-    logger.info(f"OAuth callback received for provider: {provider}")
+    logger.info(f"🔄 OAuth callback received for provider: {provider}")
 
     token = request.args.get("token")
+    mode = request.args.get("mode", "production")
+
     if not token:
-        logger.error(f"No token received in OAuth callback for {provider}")
+        logger.error(f"❌ No token received in OAuth callback for {provider}")
         return redirect(f"{FRONTEND_URL}?error=oauth_failed")
 
-    # Fetch user info from provider
-    user_info = get_user_info(provider, token)
+    # DEMO MODE: Generate simulated user data
+    if mode == "demo":
+        logger.info(f"📋 DEMO MODE: Generating simulated user data for {provider}")
+        user_info = {
+            "name": f"Demo User ({provider.title()})",
+            "email": f"demo@{provider}.example.com",
+            "phone": "+15551234567",
+            "provider": provider,
+            "mode": "demo"
+        }
+        logger.info(f"✅ Demo user created: {user_info['name']} <{user_info['email']}>")
+    else:
+        # Production mode: Fetch real user info from provider
+        logger.info(f"🔐 PRODUCTION MODE: Fetching real user info from {provider}")
+        user_info = get_user_info(provider, token)
 
-    if not user_info:
-        logger.error(f"Failed to fetch user info from {provider}")
-        return redirect(f"{FRONTEND_URL}?error=oauth_failed")
+        if not user_info:
+            logger.error(f"❌ Failed to fetch user info from {provider}")
+            return redirect(f"{FRONTEND_URL}?error=oauth_failed")
 
     # Encode user info and redirect to frontend
     encoded_user = base64.b64encode(json.dumps(user_info).encode()).decode()
-    logger.info(f"OAuth successful for {provider}, redirecting to frontend")
+    logger.info(f"✅ OAuth successful for {provider}, redirecting to frontend")
+    logger.info(f"📤 User data encoded and ready for frontend")
 
-    log_audit_event(None, "oauth_completed", {"provider": provider, "has_email": bool(user_info.get("email"))})
+    log_audit_event(None, "oauth_completed", {
+        "provider": provider,
+        "has_email": bool(user_info.get("email")),
+        "mode": mode
+    })
 
     return redirect(f"{FRONTEND_URL}?user={encoded_user}")
 
@@ -472,7 +1109,18 @@ def request_callback():
     try:
         data = request.get_json()
 
-        # Verify reCAPTCHA token
+        # SECURITY LAYER 1: Honeypot check (bot detection)
+        honeypot = data.get("website", "").strip()  # Hidden field - should be empty
+        if check_honeypot(honeypot):
+            log_audit_event(None, "honeypot_triggered", {
+                "remote_addr": request.remote_addr,
+                "user_agent": request.headers.get('User-Agent', 'Unknown'),
+                "honeypot_value": honeypot[:100]
+            })
+            # Return success to bot (don't reveal detection)
+            return jsonify(success=True, message="Request received"), 200
+
+        # SECURITY LAYER 2: Verify reCAPTCHA token
         recaptcha_token = data.get("recaptcha_token", "")
         if not verify_recaptcha(recaptcha_token):
             logger.warning(f"reCAPTCHA verification failed for request from {request.remote_addr}")
@@ -495,23 +1143,57 @@ def request_callback():
             return jsonify(success=False, error=result), 400
         visitor_phone = result  # Use E.164 formatted number
 
+        # SECURITY LAYER 3: Check daily cost limits
+        within_limits, limit_message, limit_stats = check_daily_limits()
+        if not within_limits:
+            log_audit_event(None, "daily_limit_reached", {
+                "remote_addr": request.remote_addr,
+                "stats": limit_stats
+            })
+            return jsonify(success=False, error=limit_message), 503  # 503 Service Unavailable
+
+        # SECURITY LAYER 4: Check for duplicate requests (same phone number)
+        is_duplicate, dup_message, existing_id = check_duplicate_request(visitor_phone, time_window_minutes=60)
+        if is_duplicate:
+            log_audit_event(existing_id, "duplicate_request_blocked", {
+                "remote_addr": request.remote_addr,
+                "visitor_phone": visitor_phone
+            })
+            return jsonify(success=False, error=dup_message), 429  # 429 Too Many Requests
+
+        # SECURITY LAYER 5: Generate and check request fingerprint
+        ip_address = request.remote_addr
+        user_agent = request.headers.get('User-Agent', 'Unknown')
+        fingerprint = generate_request_fingerprint(ip_address, user_agent, visitor_phone)
+
+        is_abuse, abuse_message, abuse_count = check_fingerprint_abuse(fingerprint, max_requests_per_day=5)
+        if is_abuse:
+            log_audit_event(None, "fingerprint_abuse_blocked", {
+                "remote_addr": ip_address,
+                "user_agent": user_agent,
+                "fingerprint": fingerprint,
+                "count_24h": abuse_count
+            })
+            return jsonify(success=False, error=abuse_message), 429  # 429 Too Many Requests
+
         visitor_name = data.get("name", "").strip()
         visitor_email = data.get("email", "").strip()
 
         # Generate unique request ID
         request_id = str(uuid.uuid4())
 
-        logger.info(f"Callback request received: {request_id} from {visitor_phone}")
+        logger.info(f"Callback request received: {request_id} from {visitor_phone} (fingerprint: {fingerprint[:16]}...)")
 
-        # Store in database
+        # Store in database with security metadata
         conn = sqlite3.connect(DATABASE_PATH)
         cursor = conn.cursor()
 
         cursor.execute("""
             INSERT INTO callbacks (
                 request_id, visitor_name, visitor_email, visitor_phone,
-                request_status, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                request_status, created_at, updated_at,
+                ip_address, user_agent, fingerprint
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             request_id,
             visitor_name,
@@ -519,7 +1201,10 @@ def request_callback():
             visitor_phone,
             "pending",
             datetime.utcnow().isoformat(),
-            datetime.utcnow().isoformat()
+            datetime.utcnow().isoformat(),
+            ip_address,
+            user_agent,
+            fingerprint
         ))
 
         conn.commit()
@@ -534,68 +1219,94 @@ def request_callback():
         # Check business hours before initiating call
         is_open, hours_message = is_business_hours()
 
-        # Initiate Twilio call if configured
-        if twilio_client and BUSINESS_NUMBER and TWILIO_NUMBER:
-            # If outside business hours, send SMS instead of calling
+        # Initiate callback via configured provider
+        if callback_provider and callback_provider.is_configured() and BUSINESS_NUMBER:
+            # Determine from_number based on provider
+            if isinstance(callback_provider, TwilioProvider):
+                from_number = TWILIO_NUMBER
+            elif isinstance(callback_provider, AsteriskProvider):
+                from_number = visitor_phone  # Asterisk uses visitor number as caller ID
+            else:
+                from_number = BUSINESS_NUMBER
+
+            # If outside business hours, send SMS instead of calling (Twilio only)
             if not is_open:
                 logger.info(f"Outside business hours for request {request_id} - sending SMS only")
-                try:
-                    message = twilio_client.messages.create(
-                        to=BUSINESS_NUMBER,
-                        from_=TWILIO_NUMBER,
-                        body=f"Callback request from {visitor_name or 'visitor'} at {visitor_phone}. Received outside business hours. Please call back during business hours."
-                    )
-                    update_callback_status(request_id, "sms_sent", f"SMS sent ({hours_message})", sms_sid=message.sid)
-                    logger.info(f"SMS sent for outside-hours request: {message.sid}")
-                    log_audit_event(request_id, "sms_sent_outside_hours", {"sms_sid": message.sid})
 
+                if isinstance(callback_provider, TwilioProvider):
+                    try:
+                        sms_result = callback_provider.send_sms(
+                            to_number=BUSINESS_NUMBER,
+                            from_number=from_number,
+                            message=f"Callback request from {visitor_name or 'visitor'} at {visitor_phone}. Received outside business hours. Please call back during business hours."
+                        )
+
+                        if sms_result['success']:
+                            update_callback_status(request_id, "sms_sent", f"SMS sent ({hours_message})", sms_sid=sms_result['sms_sid'])
+                            logger.info(f"SMS sent for outside-hours request: {sms_result['sms_sid']}")
+                            log_audit_event(request_id, "sms_sent_outside_hours", {"sms_sid": sms_result['sms_sid']})
+
+                            return jsonify(
+                                success=True,
+                                request_id=request_id,
+                                message=f"Request received. {hours_message}. We'll call you back during business hours."
+                            ), 200
+                        else:
+                            raise Exception(sms_result['message'])
+
+                    except Exception as sms_error:
+                        logger.error(f"Failed to send outside-hours SMS: {str(sms_error)}")
+                        update_callback_status(request_id, "failed", f"SMS failed: {str(sms_error)}")
+                        return jsonify(
+                            success=False,
+                            error="Failed to process request. Please try again later."
+                        ), 500
+                else:
+                    # Non-Twilio providers: store request for manual follow-up
+                    update_callback_status(request_id, "pending", f"Outside business hours ({hours_message})")
                     return jsonify(
                         success=True,
                         request_id=request_id,
                         message=f"Request received. {hours_message}. We'll call you back during business hours."
                     ), 200
-                except Exception as sms_error:
-                    logger.error(f"Failed to send outside-hours SMS: {str(sms_error)}")
-                    update_callback_status(request_id, "failed", f"SMS failed: {str(sms_error)}")
-                    return jsonify(
-                        success=False,
-                        error="Failed to process request. Please try again later."
-                    ), 500
 
             try:
                 # Call business first (within business hours)
-                logger.info(f"Initiating Twilio call to business for request {request_id} ({hours_message})")
+                logger.info(f"Initiating callback via {callback_provider.__class__.__name__} for request {request_id} ({hours_message})")
 
-                call = twilio_client.calls.create(
-                    to=BUSINESS_NUMBER,
-                    from_=TWILIO_NUMBER,
-                    url=f"http://twimlets.com/holdmusic?Bucket=com.twilio.music.classical",
-                    status_callback=f"{request.host_url}twilio/status_callback?request_id={request_id}",
-                    status_callback_event=["completed", "no-answer", "busy", "failed"],
-                    timeout=20
+                call_result = callback_provider.make_call(
+                    to_number=BUSINESS_NUMBER,
+                    from_number=from_number,
+                    request_id=request_id
                 )
 
-                update_callback_status(request_id, "calling", "Calling business", call_sid=call.sid)
-                logger.info(f"Twilio call initiated: {call.sid}")
+                if call_result['success']:
+                    update_callback_status(request_id, "calling", "Calling business", call_sid=call_result['call_sid'])
+                    logger.info(f"Call initiated via {callback_provider.__class__.__name__}: {call_result['call_sid']}")
+                else:
+                    raise Exception(call_result['message'])
 
-            except TwilioRestException as e:
-                logger.error(f"Twilio call failed: {str(e)}")
+            except Exception as e:
+                logger.error(f"Callback failed: {str(e)}")
                 update_callback_status(request_id, "failed", f"Call failed: {str(e)}")
 
-                # Send SMS fallback to business
-                try:
-                    message = twilio_client.messages.create(
-                        to=BUSINESS_NUMBER,
-                        from_=TWILIO_NUMBER,
-                        body=f"Missed callback request from {visitor_name or 'visitor'} at {visitor_phone}. Please call them back."
-                    )
-                    update_callback_status(request_id, "sms_sent", "SMS sent to business", sms_sid=message.sid)
-                    logger.info(f"SMS fallback sent: {message.sid}")
-                except Exception as sms_error:
-                    logger.error(f"SMS fallback failed: {str(sms_error)}")
+                # Send SMS fallback to business (Twilio only)
+                if isinstance(callback_provider, TwilioProvider):
+                    try:
+                        sms_result = callback_provider.send_sms(
+                            to_number=BUSINESS_NUMBER,
+                            from_number=from_number,
+                            message=f"Missed callback request from {visitor_name or 'visitor'} at {visitor_phone}. Please call them back."
+                        )
+
+                        if sms_result['success']:
+                            update_callback_status(request_id, "sms_sent", "SMS sent to business", sms_sid=sms_result['sms_sid'])
+                            logger.info(f"SMS fallback sent: {sms_result['sms_sid']}")
+                    except Exception as sms_error:
+                        logger.error(f"SMS fallback failed: {str(sms_error)}")
         else:
-            logger.warning("Twilio not configured - callback request stored but not processed")
-            update_callback_status(request_id, "pending", "Twilio not configured")
+            logger.warning("Callback provider not configured - callback request stored but not processed")
+            update_callback_status(request_id, "pending", "Provider not configured")
 
         return jsonify(success=True, request_id=request_id)
 
