@@ -3,7 +3,7 @@ const CONFIG = {
   // Backend detection - tries localhost first, falls back to deployed backend
   BACKEND_URL: null, // Will be set after detection
   LOCAL_BACKEND: 'http://localhost:8501',
-  DEPLOYED_BACKEND: 'https://your-backend-url.com', // Update this when you deploy
+  DEPLOYED_BACKEND: 'https://api.swipswaps.com', // Hostname-based routing - separate subdomain
   POLL_INTERVAL: 2000, // Poll for status updates every 2 seconds
   MAX_POLLS: 30, // Stop polling after 60 seconds
   DETECTION_TIMEOUT: 3000 // 3 seconds to detect local backend
@@ -29,58 +29,78 @@ function log(level, message, data = {}) {
 // Backend detection function
 async function detectBackend() {
   log('info', 'Starting backend detection...');
+  log('info', 'Current hostname:', { hostname: window.location.hostname });
   showBackendStatus('checking');
 
-  // Try local backend first (use no-cors for detection)
+  // Local dev only - try localhost backend
+  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+    log('info', 'Running in local dev mode, trying local backend first');
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), CONFIG.DETECTION_TIMEOUT);
+
+      const response = await fetch(`${CONFIG.LOCAL_BACKEND}/health`, {
+        method: 'GET',
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.status === 'healthy') {
+          CONFIG.BACKEND_URL = CONFIG.LOCAL_BACKEND;
+          usingLocalBackend = true;
+          backendDetected = true;
+          log('info', '✅ Local backend detected', { url: CONFIG.LOCAL_BACKEND });
+          showBackendStatus('local');
+          await checkTwilioConfiguration();
+          return true;
+        }
+      }
+    } catch (error) {
+      log('warn', 'Local backend not available', { error: error.message });
+    }
+  } else {
+    log('info', 'Running in production mode (GitHub Pages or deployed), skipping localhost check');
+  }
+
+  // Production / GitHub Pages - use deployed backend
+  log('info', 'Trying deployed backend:', { url: CONFIG.DEPLOYED_BACKEND });
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), CONFIG.DETECTION_TIMEOUT);
+    const timeoutId = setTimeout(() => controller.abort(), 4000); // Longer timeout for production
 
-    // Use no-cors mode - if fetch succeeds (doesn't throw), backend is running
-    await fetch(`${CONFIG.LOCAL_BACKEND}/health`, {
-      method: 'HEAD',
+    const response = await fetch(`${CONFIG.DEPLOYED_BACKEND}/health`, {
+      method: 'GET',
       signal: controller.signal,
-      mode: 'no-cors'
+      headers: { 'Accept': 'application/json' },
+      cache: 'no-store'
     });
 
     clearTimeout(timeoutId);
 
-    // If we get here, backend is responding
-    CONFIG.BACKEND_URL = CONFIG.LOCAL_BACKEND;
-    usingLocalBackend = true;
-    backendDetected = true;
-    log('info', '✅ Local backend detected', { url: CONFIG.LOCAL_BACKEND });
-    showBackendStatus('local');
-
-    // Check if Twilio is configured
-    await checkTwilioConfiguration();
-
-    return true;
-  } catch (error) {
-    log('warn', 'Local backend not available', { error: error.message });
-  }
-
-  // Try deployed backend
-  try {
-    // Use no-cors mode for detection
-    await fetch(`${CONFIG.DEPLOYED_BACKEND}/health`, {
-      method: 'HEAD',
-      mode: 'no-cors'
-    });
-
-    // If we get here, backend is responding
-    CONFIG.BACKEND_URL = CONFIG.DEPLOYED_BACKEND;
-    usingLocalBackend = false;
-    backendDetected = true;
-    log('info', '✅ Deployed backend detected', { url: CONFIG.DEPLOYED_BACKEND });
-    showBackendStatus('deployed');
-    return true;
+    if (response.ok) {
+      const data = await response.json();
+      if (data.status === 'healthy') {
+        CONFIG.BACKEND_URL = CONFIG.DEPLOYED_BACKEND;
+        usingLocalBackend = false;
+        backendDetected = true;
+        log('info', '✅ Deployed backend detected', { url: CONFIG.DEPLOYED_BACKEND, data });
+        showBackendStatus('deployed');
+        return true;
+      } else {
+        throw new Error(`Backend unhealthy: ${data.status}`);
+      }
+    } else {
+      throw new Error(`Backend returned ${response.status}`);
+    }
   } catch (error) {
     log('error', 'Deployed backend not available', { error: error.message });
   }
 
   // No backend available
-  CONFIG.BACKEND_URL = CONFIG.LOCAL_BACKEND; // Default fallback
+  CONFIG.BACKEND_URL = null;
   backendDetected = false;
   log('error', '❌ No backend detected');
   showBackendStatus('none');
@@ -249,11 +269,15 @@ form.addEventListener("submit", async (e) => {
     return;
   }
 
+  // Get honeypot field value (should be empty for legitimate users)
+  const websiteInput = document.getElementById('website');
+
   const payload = {
     name: nameInput.value.trim(),
     email: emailInput.value.trim(),
     visitor_number: phoneInput.value.trim(),
-    recaptcha_token: recaptchaResponse
+    recaptcha_token: recaptchaResponse,
+    website: websiteInput ? websiteInput.value.trim() : ''  // Honeypot field
   };
 
   // Validation

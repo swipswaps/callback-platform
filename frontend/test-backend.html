@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Backend Detection Test</title>
+  <style>
+    body {
+      font-family: monospace;
+      padding: 20px;
+      background: #1a1a1a;
+      color: #00ff00;
+    }
+    .test-result {
+      margin: 10px 0;
+      padding: 10px;
+      border: 1px solid #333;
+      background: #000;
+    }
+    .success { color: #00ff00; }
+    .error { color: #ff0000; }
+    .info { color: #00aaff; }
+    button {
+      padding: 10px 20px;
+      margin: 10px 0;
+      background: #333;
+      color: #00ff00;
+      border: 1px solid #00ff00;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #00ff00;
+      color: #000;
+    }
+  </style>
+</head>
+<body>
+  <h1>Backend Detection Test</h1>
+  <button onclick="runTests()">Run Tests</button>
+  <div id="results"></div>
+
+  <script>
+    const resultsEl = document.getElementById('results');
+
+    function log(level, message, data = {}) {
+      const div = document.createElement('div');
+      div.className = `test-result ${level}`;
+      div.textContent = `[${new Date().toISOString()}] ${message} ${JSON.stringify(data)}`;
+      resultsEl.appendChild(div);
+      console[level === 'error' ? 'error' : 'log'](message, data);
+    }
+
+    async function testBackend(url, name) {
+      log('info', `Testing ${name}: ${url}`);
+      
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+        const response = await fetch(`${url}/health`, {
+          method: 'GET',
+          signal: controller.signal,
+          headers: { 'Accept': 'application/json' },
+          cache: 'no-store'
+        });
+
+        clearTimeout(timeoutId);
+
+        log('info', `Response status: ${response.status} ${response.statusText}`);
+        log('info', `Response headers: ${JSON.stringify([...response.headers.entries()])}`);
+
+        if (response.ok) {
+          const data = await response.json();
+          log('success', `✅ ${name} SUCCESS`, data);
+          return true;
+        } else {
+          log('error', `❌ ${name} FAILED: HTTP ${response.status}`);
+          return false;
+        }
+      } catch (error) {
+        log('error', `❌ ${name} ERROR: ${error.message}`, { 
+          name: error.name,
+          stack: error.stack 
+        });
+        return false;
+      }
+    }
+
+    async function runTests() {
+      resultsEl.innerHTML = '';
+      log('info', '=== Starting Backend Detection Tests ===');
+      log('info', `Current URL: ${window.location.href}`);
+      log('info', `Hostname: ${window.location.hostname}`);
+      
+      // Test local backend
+      await testBackend('http://localhost:8501', 'Local Backend');
+      
+      // Test deployed backend
+      await testBackend('https://api.swipswaps.com', 'Deployed Backend (api.swipswaps.com)');
+      
+      log('info', '=== Tests Complete ===');
+    }
+
+    // Auto-run on load
+    window.addEventListener('load', () => {
+      setTimeout(runTests, 500);
+    });
+  </script>
+</body>
+</html>
+
