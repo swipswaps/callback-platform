@@ -32,40 +32,36 @@ async function detectBackend() {
   log('info', 'Current hostname:', { hostname: window.location.hostname });
   showBackendStatus('checking');
 
-  // Local dev only - try localhost backend
-  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-    log('info', 'Running in local dev mode, trying local backend first');
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), CONFIG.DETECTION_TIMEOUT);
+  // ALWAYS try localhost backend first (matches receipts-ocr pattern)
+  log('info', 'Trying local backend first:', { url: CONFIG.LOCAL_BACKEND });
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), CONFIG.DETECTION_TIMEOUT);
 
-      const response = await fetch(`${CONFIG.LOCAL_BACKEND}/health`, {
-        method: 'GET',
-        signal: controller.signal
-      });
+    const response = await fetch(`${CONFIG.LOCAL_BACKEND}/health`, {
+      method: 'GET',
+      signal: controller.signal
+    });
 
-      clearTimeout(timeoutId);
+    clearTimeout(timeoutId);
 
-      if (response.ok) {
-        const data = await response.json();
-        if (data.status === 'healthy') {
-          CONFIG.BACKEND_URL = CONFIG.LOCAL_BACKEND;
-          usingLocalBackend = true;
-          backendDetected = true;
-          log('info', '✅ Local backend detected', { url: CONFIG.LOCAL_BACKEND });
-          showBackendStatus('local');
-          await checkTwilioConfiguration();
-          return true;
-        }
+    if (response.ok) {
+      const data = await response.json();
+      if (data.status === 'healthy') {
+        CONFIG.BACKEND_URL = CONFIG.LOCAL_BACKEND;
+        usingLocalBackend = true;
+        backendDetected = true;
+        log('info', '✅ Local backend detected', { url: CONFIG.LOCAL_BACKEND });
+        showBackendStatus('local');
+        await checkTwilioConfiguration();
+        return true;
       }
-    } catch (error) {
-      log('warn', 'Local backend not available', { error: error.message });
     }
-  } else {
-    log('info', 'Running in production mode (GitHub Pages or deployed), skipping localhost check');
+  } catch (error) {
+    log('warn', 'Local backend not available', { error: error.message });
   }
 
-  // Production / GitHub Pages - use deployed backend
+  // Fall back to deployed backend
   log('info', 'Trying deployed backend:', { url: CONFIG.DEPLOYED_BACKEND });
   try {
     const controller = new AbortController();
