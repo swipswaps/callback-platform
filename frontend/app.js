@@ -171,10 +171,16 @@ document.querySelectorAll(".social-btn").forEach(btn => {
   btn.addEventListener("click", async () => {
     const provider = btn.dataset.provider;
     log('info', `Social login initiated: ${provider}`);
-    
+
     try {
-      // Redirect to backend OAuth flow
-      window.location.href = `${CONFIG.BACKEND_URL}/oauth/login/${provider}`;
+      // OAuth always uses deployed backend (requires consistent redirect URL)
+      // Try local backend first, fall back to deployed
+      const oauthBackend = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+        ? CONFIG.LOCAL_BACKEND
+        : CONFIG.DEPLOYED_BACKEND;
+
+      log('info', `Using OAuth backend: ${oauthBackend}`);
+      window.location.href = `${oauthBackend}/oauth/login/${provider}`;
     } catch (error) {
       log('error', 'Social login failed', { provider, error: error.message });
       showStatus('error', `Failed to connect to ${provider}. Please try again.`);
