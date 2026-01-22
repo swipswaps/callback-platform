@@ -23,34 +23,52 @@ A secure, flat-rate-friendly callback system that lets customers request a call,
 ## 🏗️ Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  Frontend (GitHub Pages)                                    │
-│  - HTML/CSS/JavaScript                                      │
-│  - Social login buttons (OAuth)                             │
-│  - Callback request form                                    │
-│  - Real-time status updates                                 │
-└────────────────┬────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│  Frontend (GitHub Pages)                                     │
+│  https://contact.swipswaps.com                               │
+│  - HTML/CSS/JavaScript                                       │
+│  - OAuth-required UX (sign in before callback)               │
+│  - Backend detection (localhost → deployed)                  │
+│  - Real-time status updates                                  │
+└────────────────┬─────────────────────────────────────────────┘
                  │
                  │ HTTPS/AJAX
                  ▼
-┌─────────────────────────────────────────────────────────────┐
-│  Backend (Docker + Flask)                                   │
-│  - OAuth provider integration                               │
-│  - Twilio API for calls/SMS                                 │
-│  - SQLite database (persistent storage)                     │
-│  - Comprehensive logging                                    │
-│  - Rate limiting & security                                 │
-└────────────────┬────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│  Cloudflare Tunnel (cloudflared)                             │
+│  https://api.swipswaps.com → localhost:8501                  │
+│  - Secure tunnel without port forwarding                     │
+│  - Automatic HTTPS                                           │
+│  - DDoS protection                                           │
+└────────────────┬─────────────────────────────────────────────┘
+                 │
+                 ▼
+┌──────────────────────────────────────────────────────────────┐
+│  Backend (Docker + Flask)                                    │
+│  localhost:8501                                              │
+│  - OAuth provider integration (⚠️ DEMO ONLY)                 │
+│  - Twilio API for calls/SMS                                  │
+│  - SQLite database (persistent storage)                      │
+│  - Comprehensive logging                                     │
+│  - Rate limiting & security (200/day, 50/hour per IP)        │
+└────────────────┬─────────────────────────────────────────────┘
                  │
                  │ Twilio API
                  ▼
-┌─────────────────────────────────────────────────────────────┐
-│  Twilio Services                                            │
-│  - Programmable Voice (calls)                               │
-│  - SMS (fallback notifications)                             │
-│  - Status callbacks (real-time updates)                     │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│  Twilio Services                                             │
+│  - Programmable Voice (calls)                                │
+│  - SMS (fallback notifications)                              │
+│  - Status callbacks (real-time updates)                      │
+└──────────────────────────────────────────────────────────────┘
 ```
+
+### Current Deployment
+
+- **Frontend**: GitHub Pages at `https://contact.swipswaps.com`
+- **Backend**: Docker container on `localhost:8501`
+- **Tunnel**: Cloudflare Tunnel routes `https://api.swipswaps.com` → `localhost:8501`
+- **DNS**: Cloudflare manages DNS for `swipswaps.com`
 
 ---
 
@@ -226,21 +244,75 @@ git add .
 git commit -m "Initial commit"
 git push origin main
 
-# 3. Enable GitHub Pages
-# Go to: Settings → Pages → Source: main branch → /frontend folder
-# Your site will be at: https://yourusername.github.io/repo-name/
+# 3. Enable GitHub Pages with GitHub Actions
+# Go to: Settings → Pages → Source: GitHub Actions
+# The workflow in .github/workflows/deploy.yml will automatically deploy
+
+# 4. (Optional) Set up custom domain
+# Go to: Settings → Pages → Custom domain
+# Enter: contact.yourdomain.com
+# Add CNAME file to frontend/:
+echo "contact.yourdomain.com" > frontend/CNAME
+git add frontend/CNAME
+git commit -m "Add custom domain"
+git push
 ```
 
-### Step 6: Update Frontend Configuration
+### Step 6: Set Up Cloudflare Tunnel (Recommended)
 
-Edit `frontend/app.js` and update the backend URL:
+Cloudflare Tunnel provides secure access to your backend without port forwarding:
 
-```javascript
-const CONFIG = {
-  BACKEND_URL: 'https://your-backend-domain.com',  // Change this!
-  // ...
-};
+```bash
+# 1. Install cloudflared
+# Download from: https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation/
+
+# 2. Authenticate
+cloudflared tunnel login
+
+# 3. Create tunnel
+cloudflared tunnel create callback-platform
+
+# 4. Create config file at ~/.cloudflared/config.yml
+cat > ~/.cloudflared/config.yml << 'EOF'
+tunnel: <YOUR_TUNNEL_ID>
+credentials-file: /home/owner/.cloudflared/<YOUR_TUNNEL_ID>.json
+
+ingress:
+  - hostname: api.yourdomain.com
+    service: http://localhost:8501
+  - service: http_status:404
+EOF
+
+# 5. Create DNS record
+cloudflared tunnel route dns callback-platform api.yourdomain.com
+
+# 6. Run tunnel
+cloudflared tunnel run callback-platform
 ```
+
+**Alternative**: Use ngrok for testing:
+```bash
+ngrok http 8501
+# Update FRONTEND_URL in .env to ngrok URL
+```
+
+### Step 7: Update Backend Configuration
+
+Edit `.env` file:
+
+```env
+# Set frontend URL (for OAuth redirects)
+FRONTEND_URL=https://contact.yourdomain.com
+
+# Backend will be accessible at:
+# - Locally: http://localhost:8501
+# - Via tunnel: https://api.yourdomain.com
+```
+
+**Frontend will automatically detect backend:**
+1. Tries `http://localhost:8501` first (3-second timeout)
+2. Falls back to `https://api.yourdomain.com` (4-second timeout)
+3. Shows backend status indicator
 
 ---
 
@@ -279,12 +351,23 @@ SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT 20;
 
 ### For Visitors (Your Customers)
 
-1. **Visit the callback page**
-2. **Optional**: Click a social login button to auto-fill your details
-3. **Enter your phone number** (required)
-4. **Click "Request Callback Now"**
-5. **Answer your phone** when it rings (usually within 10-20 seconds)
-6. **You'll be connected** to the business automatically
+**⚠️ IMPORTANT: OAuth Sign-In Required**
+
+To prevent abuse and ensure quality service, visitors must sign in before requesting a callback.
+
+1. **Visit the callback page** (e.g., `https://contact.swipswaps.com`)
+2. **Sign in** using one of the OAuth providers:
+   - Google
+   - Facebook
+   - Instagram
+   - X (Twitter)
+3. **After sign-in**: Form appears with auto-filled details
+4. **Enter your phone number** (required)
+5. **Click "Request Callback Now"**
+6. **Answer your phone** when it rings (usually within 10-20 seconds)
+7. **You'll be connected** to the business automatically
+
+**Privacy**: Your OAuth data is only used to auto-fill the form. We never share your information.
 
 ---
 
@@ -402,27 +485,45 @@ This platform follows the principle: **"If it can be typed, it MUST be scripted"
 
 ---
 
-## �🔐 OAuth Setup (Optional but Recommended)
+## 🔐 OAuth Setup (REQUIRED)
 
-### ⚠️ IMPORTANT: OAuth Implementation Status
+### ⚠️ CRITICAL: OAuth Implementation Status
 
 **Current Status**: ⚠️ **DEMO ONLY - NOT PRODUCTION READY**
 
-The OAuth implementation in this repository is a **placeholder for demonstration purposes**.
-It does NOT perform actual OAuth authentication with providers.
+The OAuth implementation in this repository uses **demo tokens** and does NOT perform actual OAuth authentication.
+
+**Current behavior**:
+- OAuth buttons redirect to backend `/oauth/login/<provider>`
+- Backend returns `demo_token_{provider}` instead of real OAuth flow
+- Frontend receives fake user data
+- **This violates security best practices and MUST be replaced before production use**
+
+### Why OAuth is Required
+
+The frontend enforces OAuth sign-in before allowing callback requests. This:
+- ✅ Prevents spam and abuse
+- ✅ Reduces callback costs (no anonymous requests)
+- ✅ Provides user accountability
+- ✅ Auto-fills user details for better UX
+
+**You MUST implement real OAuth before deploying to production.**
+
+### Implementing Real OAuth (Required Steps)
 
 **To use OAuth in production, you must**:
 1. Register apps with each provider (Google Cloud Console, Meta Developers, Twitter Developer Portal)
-2. Implement proper authorization code flow in `backend/app.py` (replace demo endpoints)
+2. Replace demo endpoints in `backend/app.py` with proper authorization code flow
 3. Add OAuth credentials (Client ID, Client Secret) to `.env`
 4. Implement state parameter for CSRF protection
-5. Test thoroughly before deployment
+5. Configure redirect URIs: `https://api.yourdomain.com/oauth/callback/{provider}`
+6. Test thoroughly before deployment
 
-**Recommended for MVP**: Remove social login buttons from `frontend/index.html` and use manual entry only.
-
-**Alternative**: Keep buttons for demo purposes but add disclaimer on frontend that OAuth is not yet functional.
+**Alternative (NOT RECOMMENDED)**: Remove OAuth requirement and add reCAPTCHA v3 for spam protection.
 
 ---
+
+### OAuth Provider Setup Guide
 
 Social login makes it easier for visitors to request callbacks. Here's how to set up each provider:
 
