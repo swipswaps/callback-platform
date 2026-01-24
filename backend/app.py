@@ -545,7 +545,7 @@ def check_duplicate_request(phone_number, time_window_minutes=60):
         return False, "", None
 
 
-def check_fingerprint_abuse(fingerprint, max_requests_per_day=5):
+def check_fingerprint_abuse(fingerprint, max_requests_per_day=20):
     """
     Check if request fingerprint shows abuse pattern.
 
@@ -553,7 +553,7 @@ def check_fingerprint_abuse(fingerprint, max_requests_per_day=5):
 
     Args:
         fingerprint (str): Request fingerprint hash
-        max_requests_per_day (int): Maximum requests allowed per day (default: 5)
+        max_requests_per_day (int): Maximum requests allowed per day (default: 20, increased for testing)
 
     Returns:
         tuple: (is_abuse: bool, message: str, request_count: int)
