@@ -442,3 +442,93 @@ if (logoutBtn) {
   });
 })();
 
+// Settings Modal and Log Viewer
+(function initSettingsModal() {
+  const settingsBtn = document.getElementById('settings-btn');
+  const modal = document.getElementById('settings-modal');
+  const closeBtn = document.getElementById('close-modal');
+  const refreshBtn = document.getElementById('refresh-logs');
+  const logOutput = document.getElementById('log-output');
+  const logStatus = document.getElementById('log-status');
+  const autoRefreshCheckbox = document.getElementById('auto-refresh-logs');
+
+  let autoRefreshInterval = null;
+
+  // Open modal
+  settingsBtn.addEventListener('click', () => {
+    modal.classList.add('show');
+    fetchLogs();
+  });
+
+  // Close modal
+  closeBtn.addEventListener('click', () => {
+    modal.classList.remove('show');
+    if (autoRefreshInterval) {
+      clearInterval(autoRefreshInterval);
+      autoRefreshInterval = null;
+      autoRefreshCheckbox.checked = false;
+    }
+  });
+
+  // Close on outside click
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      modal.classList.remove('show');
+      if (autoRefreshInterval) {
+        clearInterval(autoRefreshInterval);
+        autoRefreshInterval = null;
+        autoRefreshCheckbox.checked = false;
+      }
+    }
+  });
+
+  // Refresh logs
+  refreshBtn.addEventListener('click', fetchLogs);
+
+  // Auto-refresh toggle
+  autoRefreshCheckbox.addEventListener('change', (e) => {
+    if (e.target.checked) {
+      autoRefreshInterval = setInterval(fetchLogs, 10000);
+    } else {
+      if (autoRefreshInterval) {
+        clearInterval(autoRefreshInterval);
+        autoRefreshInterval = null;
+      }
+    }
+  });
+
+  // Fetch logs function
+  async function fetchLogs() {
+    const lines = document.getElementById('log-lines').value;
+    const since = document.getElementById('log-since').value;
+
+    refreshBtn.disabled = true;
+    refreshBtn.textContent = '⏳ Loading...';
+
+    try {
+      const params = new URLSearchParams({ lines });
+      if (since) params.append('since', since);
+
+      const response = await fetch(`${CONFIG.BACKEND_URL}/logs?${params}`);
+      const data = await response.json();
+
+      if (data.success) {
+        logOutput.value = data.logs || 'No logs available';
+        logStatus.className = 'success';
+        logStatus.textContent = `✓ Loaded ${data.lines_requested} lines (since: ${data.since})`;
+      } else {
+        logOutput.value = `Error: ${data.error}`;
+        logStatus.className = 'error';
+        logStatus.textContent = `✗ Failed: ${data.error}`;
+      }
+    } catch (error) {
+      logOutput.value = `Error fetching logs: ${error.message}`;
+      logStatus.className = 'error';
+      logStatus.textContent = `✗ Error: ${error.message}`;
+    } finally {
+      refreshBtn.disabled = false;
+      refreshBtn.textContent = '🔄 Refresh';
+    }
+  }
+})();
+

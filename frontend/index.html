@@ -14,6 +14,7 @@
     <header>
       <h1>Request a Callback</h1>
       <p class="subtitle">Connect with us instantly - we'll call you back</p>
+      <button id="settings-btn" class="settings-btn" title="View System Logs">⚙️</button>
     </header>
 
     <!-- Backend Status Indicator -->
@@ -168,6 +169,43 @@
         Calls are not recorded by default.
       </p>
     </footer>
+  </div>
+
+  <!-- Settings Modal -->
+  <div id="settings-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>📋 System Logs</h2>
+        <button class="modal-close" id="close-modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="log-controls">
+          <label>Lines:
+            <select id="log-lines">
+              <option value="50">50</option>
+              <option value="100" selected>100</option>
+              <option value="200">200</option>
+              <option value="500">500</option>
+            </select>
+          </label>
+          <label>Since:
+            <select id="log-since">
+              <option value="">All</option>
+              <option value="5m">5 min</option>
+              <option value="10m" selected>10 min</option>
+              <option value="30m">30 min</option>
+              <option value="1h">1 hour</option>
+            </select>
+          </label>
+          <button id="refresh-logs">🔄 Refresh</button>
+          <label>
+            <input type="checkbox" id="auto-refresh-logs"> Auto-refresh (10s)
+          </label>
+        </div>
+        <textarea id="log-output" readonly></textarea>
+        <div id="log-status"></div>
+      </div>
+    </div>
   </div>
 
   <script src="app.js"></script>
