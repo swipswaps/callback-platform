@@ -94,6 +94,77 @@ IF file in [backend/app.py, .env, docker-compose.yml] was modified THEN
 END IF
 ```
 
+### 🔴 RULE 0 VIOLATION DETECTOR (Emission Gate)
+
+**BEFORE emitting ANY response:**
+```
+CHECK all 5 conditions:
+1. All user instructions satisfied? YES/NO
+2. No rule conflicts exist? YES/NO (check scope rules!)
+3. No requested artifact missing? YES/NO
+4. No partial compliance? YES/NO
+5. No uncertainty being guessed? YES/NO
+
+IF any condition = NO THEN
+    HALT emission
+    FIX the issue
+    RE-CHECK all 5 conditions
+END IF
+```
+
+**Critical Scope Check:**
+```
+IF about to create *.md file THEN
+    CHECK: Did user explicitly request this file? YES/NO
+    IF NO THEN
+        HALT - Violates scope rule "NEVER proactively create documentation files"
+    END IF
+END IF
+```
+
+### 🔴 RULE 2 VIOLATION DETECTOR (No Partial Compliance)
+
+**IF user requests multiple actions:**
+```
+User says: "Do X and Y"
+MUST execute BOTH X and Y
+MUST NOT execute only X and assume Y will happen
+Partial compliance = non-compliance
+```
+
+### 🔴 RULE 13 VIOLATION DETECTOR (Self-Audit Before Emission)
+
+**BEFORE emitting response:**
+```
+AUDIT checklist:
+- Did I remove any features? YES/NO
+- Did I assume anything? YES/NO
+- Did I skip any steps? YES/NO
+- Did I fabricate any data? YES/NO
+- Did I violate scope rules? YES/NO
+
+IF any = YES THEN
+    HALT emission
+    FIX the issue
+END IF
+```
+
+### 🔴 RULE 17 VIOLATION DETECTOR (Version Control & Provenance)
+
+**IF creating any artifact (file, script, config):**
+```
+MUST include metadata:
+---
+Created: [ISO timestamp]
+Commit: [git commit hash if applicable]
+Session: [conversation context]
+---
+
+IF metadata missing THEN
+    ADD metadata before emission
+END IF
+```
+
 ---
 
 ## ENFORCEMENT MECHANISM
@@ -102,11 +173,16 @@ At the END of EVERY response, the agent MUST emit:
 
 ```
 ## COMPLIANCE AUDIT:
+- Rule 0 (Emission Gate): ✅ PASS / ❌ FAIL
+- Rule 2 (No Partial Compliance): ✅ PASS / ❌ N/A
+- Rule 4 (Mode Locking): ✅ PASS / ❌ N/A
+- Rule 8 (Logging Pattern): ✅ PASS / ❌ FAIL
 - Rule 9 (Terminal Read): ✅ PASS / ❌ FAIL
-- Rule 8 (Logging Pattern): ✅ PASS / ❌ FAIL  
+- Rule 13 (Self-Audit): ✅ PASS / ❌ FAIL
 - Rule 15 (Zero-Hang): ✅ PASS / ❌ FAIL
-- Rule 4 (Mode Locking): ✅ PASS / ❌ FAIL
+- Rule 17 (Provenance): ✅ PASS / ❌ N/A
 - Rule 21 (Docker Rebuild): ✅ PASS / ❌ N/A
+- Scope Rules (No unsolicited .md files): ✅ PASS / ❌ FAIL
 
 IF any ❌ FAIL detected:
   STOP - Do not emit response
