@@ -1,37 +1,79 @@
 version: "3.9"
 
 services:
+  # Asterisk PBX server with AGI support for callback alternative
+  asterisk:
+    build:
+      context: .
+      dockerfile: asterisk/Dockerfile
+    container_name: callback-asterisk
+    hostname: asterisk
+    ports:
+      - "5060:5060/udp"  # SIP
+      - "5038:5038"      # AMI (Asterisk Manager Interface)
+      - "10000-10100:10000-10100/udp"  # RTP media
+    volumes:
+      - ./asterisk/agi-bin:/var/lib/asterisk/agi-bin
+      - ./asterisk/conf:/etc/asterisk
+      - asterisk-logs:/var/log/asterisk
+    networks:
+      - callback-network
+    restart: unless-stopped
+    environment:
+      - TZ=America/New_York
+
   backend:
     build: ./backend
     container_name: callback-backend
     ports:
       - "8501:8501"
+    depends_on:
+      - asterisk
+    networks:
+      - callback-network
     environment:
-      # Twilio Configuration
+      # Provider Selection (twilio or asterisk)
+      - CALLBACK_PROVIDER=${CALLBACK_PROVIDER:-twilio}
+
+      # Asterisk Configuration (for asterisk provider)
+      - ASTERISK_HOST=asterisk
+      - ASTERISK_AMI_PORT=5038
+      - ASTERISK_AMI_USER=callback_manager
+      - ASTERISK_AMI_SECRET=callback_secret_2026
+
+      # Twilio Configuration (for twilio provider)
       # IMPORTANT: Replace these with your actual Twilio credentials
       - TWILIO_SID=${TWILIO_SID:-your_twilio_account_sid}
       - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN:-your_twilio_auth_token}
       - TWILIO_NUMBER=${TWILIO_NUMBER:-+15551234567}
-      
+
       # Business Configuration
       - BUSINESS_NUMBER=${BUSINESS_NUMBER:-+15557654321}
-      
+      - BUSINESS_HOURS_START=${BUSINESS_HOURS_START:-09:00}
+      - BUSINESS_HOURS_END=${BUSINESS_HOURS_END:-17:00}
+      - BUSINESS_WEEKDAYS_ONLY=${BUSINESS_WEEKDAYS_ONLY:-true}
+
       # Frontend URL (for OAuth redirects)
       - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000}
-      
+
+      # Google OAuth Configuration
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+
+      # Facebook OAuth Configuration
+      - FACEBOOK_APP_ID=${FACEBOOK_APP_ID}
+      - FACEBOOK_APP_SECRET=${FACEBOOK_APP_SECRET}
+
       # Database path (inside container)
       - DATABASE_PATH=/app/data/callbacks.db
-    
+
     volumes:
       # Persist database and logs
       - callback-data:/app/data
       - callback-logs:/tmp
-    
+
     restart: unless-stopped
-    
-    networks:
-      - callback-network
-    
+
     healthcheck:
       test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8501/health', timeout=5)"]
       interval: 30s
@@ -43,6 +85,8 @@ volumes:
   callback-data:
     driver: local
   callback-logs:
+    driver: local
+  asterisk-logs:
     driver: local
 
 networks:

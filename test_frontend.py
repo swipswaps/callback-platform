@@ -12,28 +12,29 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.firefox.options import Options
 
-def test_frontend():
+def test_frontend(url="http://localhost:3000"):
     """Test frontend with Selenium per Rule 35 (Firefox priority)."""
-    
+
     print("=" * 60)
     print("SELENIUM TEST - Callback Platform Frontend")
     print("=" * 60)
-    
+    print(f"Testing URL: {url}")
+
     # Setup Firefox with headless option
     options = Options()
     # Don't use headless - we want to see it
     # options.add_argument('--headless')
-    
+
     driver = None
     try:
         print("\n[1/6] Starting Firefox browser...")
         driver = webdriver.Firefox(options=options)
         driver.set_window_size(1280, 1024)
         print("✓ Firefox started")
-        
-        print("\n[2/6] Loading http://localhost:3000...")
-        driver.get("http://localhost:3000")
-        time.sleep(2)  # Wait for page load
+
+        print(f"\n[2/6] Loading {url}...")
+        driver.get(url)
+        time.sleep(3)  # Wait for page load and backend detection
         print("✓ Page loaded")
         
         print("\n[3/6] Checking for backend status indicator...")
@@ -55,7 +56,9 @@ def test_frontend():
         print(f"✓ Status icon: '{status_icon}'")
         
         print("\n[6/6] Taking screenshot for OCR verification...")
-        screenshot_path = "/tmp/selenium-callback-test.png"
+        # Use different filename for GitHub Pages test
+        is_github_pages = "github.io" in url
+        screenshot_path = "/tmp/selenium-github-pages.png" if is_github_pages else "/tmp/selenium-callback-test.png"
         driver.save_screenshot(screenshot_path)
         print(f"✓ Screenshot saved to {screenshot_path}")
         
@@ -115,6 +118,8 @@ def test_frontend():
             print("✓ Browser closed")
 
 if __name__ == "__main__":
-    success = test_frontend()
+    import sys
+    url = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:3000"
+    success = test_frontend(url)
     sys.exit(0 if success else 1)
 

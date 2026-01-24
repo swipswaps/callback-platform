@@ -369,6 +369,12 @@ function showAuthenticatedUI() {
   document.getElementById('profile-name').textContent = currentUser.name || 'User';
   document.getElementById('profile-email').textContent = currentUser.email || '';
 
+  // Show authenticated instructions
+  const authInstructions = document.getElementById('instructions-authenticated');
+  const unauthInstructions = document.getElementById('instructions-unauthenticated');
+  if (authInstructions) authInstructions.style.display = 'block';
+  if (unauthInstructions) unauthInstructions.style.display = 'none';
+
   // Autofill form
   autofill(currentUser);
 
@@ -380,6 +386,12 @@ function showUnauthenticatedUI() {
   document.getElementById('auth-required').style.display = 'block';
   document.getElementById('user-profile').style.display = 'none';
   document.getElementById('callbackForm').style.display = 'none';
+
+  // Show unauthenticated instructions
+  const authInstructions = document.getElementById('instructions-authenticated');
+  const unauthInstructions = document.getElementById('instructions-unauthenticated');
+  if (authInstructions) authInstructions.style.display = 'none';
+  if (unauthInstructions) unauthInstructions.style.display = 'block';
 
   log('info', '🔒 Unauthenticated UI shown - OAuth required');
 }

@@ -5,11 +5,27 @@ description: "Mandatory rules for all AI assistant interactions - workflow patte
 
 # Mandatory Rules for AI Assistant Interactions
 
-Version: 6.1 (GitHub CLI Integration)
+Version: 6.2 (Process Output Reliability & Scope Protection)
 Status: Authoritative
 Scope: Overrides all default assistant behavior
 
-**CRITICAL UPDATES IN v6.1:**
+**CRITICAL UPDATES IN v6.2:**
+- **Rule 57: NEW - Process Output Capture Reliability (🔴 HARD STOP)**
+- **Rule 58: NEW - Diagnose Before Modify (🔴 HARD STOP)**
+- **Compliance Audit: ENHANCED - Added tee usage check**
+- Informed by months of `read-process` timeout failures
+- Addresses LLM breaking working systems while diagnosing
+- Establishes mandatory tee pattern for all process output
+- Documents scope containment for diagnostic tasks
+
+**WHAT v6.2 SOLVES:**
+- LLMs relying on `read-process` which times out even when output is available
+- LLMs modifying working systems when asked to diagnose problems
+- LLMs ignoring Rule 6 (scope containment) during troubleshooting
+- Pattern: User says "X doesn't work" → LLM changes X → X breaks completely
+
+**PREVIOUS UPDATES (v6.1 - GitHub CLI Integration):**
+- **Rule 54: NEW - GitHub CLI Usage (🟠 CRITICAL)**
 - **Rule 54: NEW - GitHub CLI Usage (🟠 CRITICAL)**
 - **Rule 55: NEW - Git Operations Safety (🟠 CRITICAL)**
 - **Rule 56: NEW - Repository Initialization Best Practices (🟡 MAJOR)**
@@ -1286,6 +1302,141 @@ Includes 5 automation scripts (35.6KB) and full documentation.
 - Works with Rule 0 (capture before/after state)
 - Works with Rule 2 (evidence before assertion)
 - Works with Rule 24 (test before push)
+
+============================================================
+RULE 57 — Process Output Capture Reliability 🔴 (NEW v6.2)
+============================================================
+
+**MANDATORY: Always use `tee` to capture process output to log files.**
+
+This rule addresses a months-long bug where `read-process` times out even when process output is available.
+
+**REQUIRED pattern for ALL process launches:**
+
+```bash
+command 2>&1 | tee /tmp/descriptive_name.log
+```
+
+**Why this is mandatory:**
+
+| Tool | Reliability | When to Use |
+|------|-------------|-------------|
+| `read-process` | ❌ UNRELIABLE - Times out frequently | NEVER rely on alone |
+| `tee` + log file | ✅ RELIABLE - Always captures output | ALWAYS use |
+
+**FORBIDDEN:**
+
+❌ Launching process without `tee`
+❌ Relying solely on `read-process` to capture output
+❌ Claiming "process timed out" without checking log file
+❌ Using `read-process` without fallback to log file
+
+**REQUIRED workflow:**
+
+```bash
+# 1. Launch with tee
+command 2>&1 | tee /tmp/output.log
+
+# 2. Try read-process (may timeout)
+read-process terminal_id
+
+# 3. If timeout, read log file (ALWAYS works)
+cat /tmp/output.log
+```
+
+**Example - CORRECT:**
+
+```bash
+python3 test.py 2>&1 | tee /tmp/test_output.log
+# If read-process times out:
+cat /tmp/test_output.log  # ← ALWAYS has the output
+```
+
+**Example - WRONG (Rule 57 violation):**
+
+```bash
+python3 test.py  # ← No tee
+# read-process times out
+# Output is lost, no way to recover
+```
+
+**Bug report to Augment Code:**
+
+The `read-process` tool has a persistent bug (months-long) where it times out even when:
+- Process has completed successfully
+- Output is available
+- Return code is 0
+
+This forces the workaround of always using `tee` to capture output to files.
+
+**Cross-reference:**
+- Works with Rule 0 (evidence-based workflow)
+- Works with Rule 2 (evidence before assertion)
+- Works with Rule 29 (terminal output capture)
+
+============================================================
+RULE 58 — Diagnose Before Modify 🔴 (NEW v6.2)
+============================================================
+
+**When user reports "X doesn't work", DIAGNOSE ONLY. Do NOT modify X.**
+
+This rule prevents breaking working systems during troubleshooting.
+
+**REQUIRED diagnostic workflow:**
+
+1. **Read logs** (Rule 25A)
+2. **Test current state** (with evidence)
+3. **Identify root cause** (with evidence)
+4. **Propose solution** (ask permission if destructive)
+5. **Only then modify** (after user approval)
+
+**FORBIDDEN:**
+
+❌ Modifying code when asked to diagnose
+❌ "Fixing" working systems without evidence they're broken
+❌ Changing configuration during investigation
+❌ Assuming what the problem is without evidence
+
+**Example - User says: "Backend works locally but not on external network"**
+
+✅ **CORRECT (Rule 58 compliant):**
+```
+1. Check tunnel logs
+2. Check backend logs
+3. Test backend locally (curl localhost:8501)
+4. Test backend via tunnel (curl https://domain.com/api/health)
+5. Compare results
+6. Identify: "Tunnel config doesn't route /api/* to backend"
+7. Propose: "Should I update tunnel config to add /api/* routing?"
+8. Wait for user approval
+9. Make change only after approval
+```
+
+❌ **WRONG (Rule 58 violation):**
+```
+1. "Backend doesn't work externally"
+2. Immediately modify tunnel config
+3. Immediately modify frontend code
+4. Restart tunnel
+5. Site stops working completely
+6. Broke working system while "diagnosing"
+```
+
+**Scope containment during diagnosis:**
+
+| User Request | Allowed Actions | Forbidden Actions |
+|--------------|-----------------|-------------------|
+| "X doesn't work" | Read logs, test X, identify cause | Modify X, change config |
+| "Diagnose Y" | Gather evidence about Y | Fix Y without permission |
+| "Why is Z failing?" | Test Z, check logs | Change Z's code/config |
+
+**Cross-reference:**
+- Works with Rule 5 (ask don't guess)
+- Works with Rule 6 (scope containment)
+- Works with Rule 8 (feature preservation)
+- Works with Rule 18 (feature removal prohibition)
+- Works with Rule 25A (mandatory log file review)
+- Works with Rule 50 (rewind on contradiction)
 
 ============================================================
 FINAL STEP — Compliance Self-Audit 🔴

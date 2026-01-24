@@ -74,6 +74,14 @@ FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
 DATABASE_PATH = os.environ.get("DATABASE_PATH", "/tmp/callbacks.db")
 RECAPTCHA_SECRET = os.environ.get("RECAPTCHA_SECRET", "6LeIxAcTAAAAAGG-vFI1TnRWxMZNFuojJ4WifJWe")  # Test key
 
+# Google OAuth configuration
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+
+# Facebook OAuth configuration
+FACEBOOK_APP_ID = os.environ.get("FACEBOOK_APP_ID", "")
+FACEBOOK_APP_SECRET = os.environ.get("FACEBOOK_APP_SECRET", "")
+
 # Business hours configuration
 BUSINESS_HOURS_START = os.environ.get("BUSINESS_HOURS_START", "09:00")  # 9 AM
 BUSINESS_HOURS_END = os.environ.get("BUSINESS_HOURS_END", "17:00")  # 5 PM
@@ -1023,74 +1031,199 @@ BUSINESS_WEEKDAYS_ONLY=true
 def oauth_login(provider):
     """
     Initiate OAuth login flow for specified provider.
-
-    DEMO MODE: Since OAuth credentials are not configured, this simulates
-    a successful OAuth flow with demo user data. In production, this would
-    redirect to the actual OAuth provider.
-
-    Transparency: All events logged to /tmp/app.log and audit_log table.
+    Redirects to the OAuth provider's authorization page.
     """
     logger.info(f"🔐 OAuth login initiated for provider: {provider}")
-    logger.info(f"📋 DEMO MODE: Simulating OAuth flow (no real credentials configured)")
-    log_audit_event(None, "oauth_login_initiated", {"provider": provider, "mode": "demo"})
+    log_audit_event(None, "oauth_login_initiated", {"provider": provider})
 
-    # DEMO MODE: Skip real OAuth provider, go directly to callback with demo data
-    # In production, this would be: redirect(f"https://accounts.google.com/o/oauth2/v2/auth?...")
-    logger.info(f"✅ Simulating successful {provider} authentication")
-    return redirect(f"/oauth/callback/{provider}?token=demo_token_{provider}&mode=demo")
+    if provider == "google":
+        if not GOOGLE_CLIENT_ID:
+            logger.error("❌ Google OAuth not configured - missing GOOGLE_CLIENT_ID")
+            return redirect(f"{FRONTEND_URL}?error=oauth_not_configured")
+
+        # Determine redirect URI based on request origin
+        if request.host.startswith("localhost"):
+            redirect_uri = "http://localhost:8501/oauth/callback/google"
+        else:
+            redirect_uri = "https://api.swipswaps.com/oauth/callback/google"
+
+        # Build Google OAuth authorization URL
+        from urllib.parse import urlencode
+        params = {
+            "client_id": GOOGLE_CLIENT_ID,
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "scope": "openid email profile",
+            "access_type": "offline",
+            "prompt": "consent"
+        }
+        auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
+        logger.info(f"✅ Redirecting to Google OAuth: {auth_url}")
+        return redirect(auth_url)
+
+    elif provider == "facebook":
+        if not FACEBOOK_APP_ID:
+            logger.error("❌ Facebook OAuth not configured - missing FACEBOOK_APP_ID")
+            return redirect(f"{FRONTEND_URL}?error=oauth_not_configured")
+
+        # Determine redirect URI based on request origin
+        if request.host.startswith("localhost"):
+            redirect_uri = "http://localhost:8501/oauth/callback/facebook"
+        else:
+            redirect_uri = "https://api.swipswaps.com/oauth/callback/facebook"
+
+        # Build Facebook OAuth authorization URL
+        from urllib.parse import urlencode
+        params = {
+            "client_id": FACEBOOK_APP_ID,
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "scope": "email public_profile"
+        }
+        auth_url = f"https://www.facebook.com/v18.0/dialog/oauth?{urlencode(params)}"
+        logger.info(f"✅ Redirecting to Facebook OAuth: {auth_url}")
+        return redirect(auth_url)
+
+    else:
+        logger.error(f"❌ Unsupported OAuth provider: {provider}")
+        return redirect(f"{FRONTEND_URL}?error=unsupported_provider")
 
 
 @app.route("/oauth/callback/<provider>", methods=["GET"])
 def oauth_callback(provider):
     """
     Handle OAuth callback and fetch user information.
-
-    DEMO MODE: Returns simulated user data. In production, this would
-    exchange the auth code for an access token and fetch real user data.
-
-    Transparency: All user data logged (sanitized) to /tmp/app.log.
+    Exchanges authorization code for access token and fetches user data.
     """
     logger.info(f"🔄 OAuth callback received for provider: {provider}")
 
-    token = request.args.get("token")
-    mode = request.args.get("mode", "production")
+    code = request.args.get("code")
+    error = request.args.get("error")
 
-    if not token:
-        logger.error(f"❌ No token received in OAuth callback for {provider}")
+    if error:
+        logger.error(f"❌ OAuth error from {provider}: {error}")
         return redirect(f"{FRONTEND_URL}?error=oauth_failed")
 
-    # DEMO MODE: Generate simulated user data
-    if mode == "demo":
-        logger.info(f"📋 DEMO MODE: Generating simulated user data for {provider}")
-        user_info = {
-            "name": f"Demo User ({provider.title()})",
-            "email": f"demo@{provider}.example.com",
-            "phone": "+15551234567",
-            "provider": provider,
-            "mode": "demo"
-        }
-        logger.info(f"✅ Demo user created: {user_info['name']} <{user_info['email']}>")
-    else:
-        # Production mode: Fetch real user info from provider
-        logger.info(f"🔐 PRODUCTION MODE: Fetching real user info from {provider}")
-        user_info = get_user_info(provider, token)
+    if not code:
+        logger.error(f"❌ No authorization code received in OAuth callback for {provider}")
+        return redirect(f"{FRONTEND_URL}?error=oauth_failed")
 
-        if not user_info:
-            logger.error(f"❌ Failed to fetch user info from {provider}")
+    if provider == "google":
+        try:
+            # Determine redirect URI (must match what was sent to Google)
+            if request.host.startswith("localhost"):
+                redirect_uri = "http://localhost:8501/oauth/callback/google"
+            else:
+                redirect_uri = "https://api.swipswaps.com/oauth/callback/google"
+
+            # Exchange authorization code for access token
+            logger.info(f"🔐 Exchanging authorization code for access token")
+            token_url = "https://oauth2.googleapis.com/token"
+            token_data = {
+                "code": code,
+                "client_id": GOOGLE_CLIENT_ID,
+                "client_secret": GOOGLE_CLIENT_SECRET,
+                "redirect_uri": redirect_uri,
+                "grant_type": "authorization_code"
+            }
+
+            token_response = requests.post(token_url, data=token_data, timeout=15)
+
+            if token_response.status_code != 200:
+                logger.error(f"❌ Token exchange failed: {token_response.status_code} - {token_response.text}")
+                return redirect(f"{FRONTEND_URL}?error=oauth_failed")
+
+            token_json = token_response.json()
+            access_token = token_json.get("access_token")
+
+            if not access_token:
+                logger.error(f"❌ No access token in response")
+                return redirect(f"{FRONTEND_URL}?error=oauth_failed")
+
+            logger.info(f"✅ Access token obtained successfully")
+
+            # Fetch user info using access token
+            user_info = get_user_info(provider, access_token)
+
+            if not user_info:
+                logger.error(f"❌ Failed to fetch user info from {provider}")
+                return redirect(f"{FRONTEND_URL}?error=oauth_failed")
+
+            # Encode user info and redirect to frontend
+            encoded_user = base64.b64encode(json.dumps(user_info).encode()).decode()
+            logger.info(f"✅ OAuth successful for {provider}, redirecting to frontend")
+            logger.info(f"📤 User: {user_info.get('name')} <{user_info.get('email')}>")
+
+            log_audit_event(None, "oauth_completed", {
+                "provider": provider,
+                "has_email": bool(user_info.get("email"))
+            })
+
+            return redirect(f"{FRONTEND_URL}?user={encoded_user}")
+
+        except Exception as e:
+            logger.error(f"❌ OAuth callback error: {str(e)}")
             return redirect(f"{FRONTEND_URL}?error=oauth_failed")
 
-    # Encode user info and redirect to frontend
-    encoded_user = base64.b64encode(json.dumps(user_info).encode()).decode()
-    logger.info(f"✅ OAuth successful for {provider}, redirecting to frontend")
-    logger.info(f"📤 User data encoded and ready for frontend")
+    elif provider == "facebook":
+        try:
+            # Determine redirect URI (must match what was sent to Facebook)
+            if request.host.startswith("localhost"):
+                redirect_uri = "http://localhost:8501/oauth/callback/facebook"
+            else:
+                redirect_uri = "https://api.swipswaps.com/oauth/callback/facebook"
 
-    log_audit_event(None, "oauth_completed", {
-        "provider": provider,
-        "has_email": bool(user_info.get("email")),
-        "mode": mode
-    })
+            # Exchange authorization code for access token
+            logger.info(f"🔐 Exchanging authorization code for access token")
+            token_url = "https://graph.facebook.com/v18.0/oauth/access_token"
+            token_params = {
+                "code": code,
+                "client_id": FACEBOOK_APP_ID,
+                "client_secret": FACEBOOK_APP_SECRET,
+                "redirect_uri": redirect_uri
+            }
 
-    return redirect(f"{FRONTEND_URL}?user={encoded_user}")
+            token_response = requests.get(token_url, params=token_params, timeout=15)
+
+            if token_response.status_code != 200:
+                logger.error(f"❌ Token exchange failed: {token_response.status_code} - {token_response.text}")
+                return redirect(f"{FRONTEND_URL}?error=oauth_failed")
+
+            token_json = token_response.json()
+            access_token = token_json.get("access_token")
+
+            if not access_token:
+                logger.error(f"❌ No access token in response")
+                return redirect(f"{FRONTEND_URL}?error=oauth_failed")
+
+            logger.info(f"✅ Access token obtained successfully")
+
+            # Fetch user info using access token
+            user_info = get_user_info(provider, access_token)
+
+            if not user_info:
+                logger.error(f"❌ Failed to fetch user info from {provider}")
+                return redirect(f"{FRONTEND_URL}?error=oauth_failed")
+
+            # Encode user info and redirect to frontend
+            encoded_user = base64.b64encode(json.dumps(user_info).encode()).decode()
+            logger.info(f"✅ OAuth successful for {provider}, redirecting to frontend")
+            logger.info(f"📤 User: {user_info.get('name')} <{user_info.get('email')}>")
+
+            log_audit_event(None, "oauth_completed", {
+                "provider": provider,
+                "has_email": bool(user_info.get("email"))
+            })
+
+            return redirect(f"{FRONTEND_URL}?user={encoded_user}")
+
+        except Exception as e:
+            logger.error(f"❌ OAuth callback error: {str(e)}")
+            return redirect(f"{FRONTEND_URL}?error=oauth_failed")
+
+    else:
+        logger.error(f"❌ Unsupported OAuth provider: {provider}")
+        return redirect(f"{FRONTEND_URL}?error=unsupported_provider")
 
 
 @app.route("/request_callback", methods=["POST"])

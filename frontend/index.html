@@ -142,14 +142,27 @@
 
     <footer class="info-section">
       <h4>How It Works</h4>
-      <ol>
-        <li>Click any sign-in button above to authenticate</li>
-        <li>Your details will be auto-filled in the callback form</li>
-        <li>Review and submit your callback request</li>
+
+      <!-- Instructions when NOT authenticated -->
+      <ol id="instructions-unauthenticated">
+        <li>Sign in with Google or Facebook to auto-fill your details</li>
+        <li>Enter your phone number</li>
+        <li>Submit your callback request</li>
         <li>We call you first to verify you're available</li>
         <li>Once you answer, we connect you to our team</li>
         <li>If we miss your call, you'll receive an SMS</li>
       </ol>
+
+      <!-- Instructions when authenticated -->
+      <ol id="instructions-authenticated" style="display: none;">
+        <li>Enter your phone number below</li>
+        <li>Complete the CAPTCHA verification</li>
+        <li>Click "Request Callback Now"</li>
+        <li>We'll call you first to verify you're available</li>
+        <li>Once you answer, we connect you to our team</li>
+        <li>If we miss your call, you'll receive an SMS</li>
+      </ol>
+
       <p class="privacy-note">
         🔒 Your privacy matters. We never share your information.
         Calls are not recorded by default.
