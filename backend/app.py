@@ -190,25 +190,37 @@ class TwilioProvider(CallbackProvider):
         else:
             self.logger.warning("Twilio credentials not configured")
 
-    def make_call(self, to_number, from_number, request_id):
-        """Initiate Twilio call to business number"""
+    def make_call(self, to_number, from_number, request_id, visitor_number=None):
+        """
+        Initiate Twilio call to visitor first, then bridge to business.
+
+        Args:
+            to_number: Business phone number
+            from_number: Twilio number (caller ID)
+            request_id: Unique request ID
+            visitor_number: Visitor's phone number to call first
+        """
         if not self.client:
             self.logger.error("Twilio client not initialized")
             return {'success': False, 'call_sid': None, 'message': 'Twilio not configured'}
 
         try:
-            self.logger.info(f"Initiating Twilio call for request {request_id}: {from_number} -> {to_number}")
+            # Determine backend URL for TwiML callback
+            backend_url = os.environ.get("BACKEND_URL", "https://api.swipswaps.com")
 
+            self.logger.info(f"Initiating Twilio call for request {request_id}: Calling visitor {visitor_number} first, then bridging to business {to_number}")
+
+            # Call visitor first
             call = self.client.calls.create(
-                to=to_number,
-                from_=from_number,
-                url=f"http://twimlets.com/holdmusic?Bucket=com.twilio.music.classical",
-                status_callback=f"http://localhost:8501/twilio/status_callback?request_id={request_id}",
+                to=visitor_number,  # Call visitor first
+                from_=from_number,  # Twilio number as caller ID
+                url=f"{backend_url}/twilio/connect?request_id={request_id}&business_number={to_number}",
+                status_callback=f"{backend_url}/twilio/status_callback?request_id={request_id}",
                 status_callback_event=["completed", "no-answer", "busy", "failed"],
-                timeout=20
+                timeout=30
             )
 
-            self.logger.info(f"Twilio call initiated successfully: {call.sid}")
+            self.logger.info(f"Twilio call initiated successfully: {call.sid} - calling visitor {visitor_number}")
             return {'success': True, 'call_sid': call.sid, 'message': 'Call initiated'}
 
         except TwilioRestException as e:
@@ -1404,14 +1416,24 @@ def request_callback():
                     ), 200
 
             try:
-                # Call business first (within business hours)
+                # Call visitor first, then bridge to business (within business hours)
                 logger.info(f"Initiating callback via {callback_provider.__class__.__name__} for request {request_id} ({hours_message})")
 
-                call_result = callback_provider.make_call(
-                    to_number=BUSINESS_NUMBER,
-                    from_number=from_number,
-                    request_id=request_id
-                )
+                # Pass visitor_number for Twilio provider to enable call bridging
+                if isinstance(callback_provider, TwilioProvider):
+                    call_result = callback_provider.make_call(
+                        to_number=BUSINESS_NUMBER,
+                        from_number=from_number,
+                        request_id=request_id,
+                        visitor_number=visitor_phone
+                    )
+                else:
+                    # Other providers use original signature
+                    call_result = callback_provider.make_call(
+                        to_number=BUSINESS_NUMBER,
+                        from_number=from_number,
+                        request_id=request_id
+                    )
 
                 if call_result['success']:
                     update_callback_status(request_id, "calling", "Calling business", call_sid=call_result['call_sid'])
@@ -1480,6 +1502,97 @@ def get_status(request_id):
     except Exception as e:
         logger.error(f"Error fetching status: {str(e)}")
         return jsonify(success=False, error="Internal server error"), 500
+
+
+@app.route("/twilio/connect", methods=["GET", "POST"])
+def twilio_connect():
+    """
+    TwiML endpoint - called when visitor answers the phone.
+    Plays a message to visitor, then dials business number to bridge the call.
+    """
+    try:
+        from twilio.twiml.voice_response import VoiceResponse, Dial
+
+        request_id = request.args.get("request_id")
+        business_number = request.args.get("business_number")
+
+        logger.info(f"TwiML connect endpoint called for request {request_id} - bridging to business {business_number}")
+
+        response = VoiceResponse()
+
+        # Play message to visitor
+        response.say("Please wait while we connect you to our team.", voice="alice")
+        response.pause(length=1)
+
+        # Dial business number and bridge the call
+        dial = Dial(
+            caller_id=TWILIO_NUMBER,
+            timeout=30,
+            action=f"/twilio/dial_status?request_id={request_id}",
+            record="do-not-record"  # Don't record by default
+        )
+        dial.number(business_number)
+        response.append(dial)
+
+        # If business doesn't answer, play message to visitor
+        response.say("We're sorry, our team is currently unavailable. We'll call you back shortly.", voice="alice")
+
+        logger.debug(f"TwiML response generated for request {request_id}")
+        return str(response), 200, {'Content-Type': 'text/xml'}
+
+    except Exception as e:
+        logger.error(f"Error generating TwiML: {str(e)}")
+        response = VoiceResponse()
+        response.say("We're sorry, an error occurred. Please try again later.", voice="alice")
+        return str(response), 200, {'Content-Type': 'text/xml'}
+
+
+@app.route("/twilio/dial_status", methods=["POST"])
+def twilio_dial_status():
+    """
+    Handle dial status callback - called after attempting to connect to business.
+    """
+    try:
+        request_id = request.args.get("request_id")
+        dial_call_status = request.form.get("DialCallStatus")
+
+        logger.info(f"Dial status callback for request {request_id}: {dial_call_status}")
+
+        if dial_call_status == "completed":
+            update_callback_status(request_id, "completed", "Call connected and completed")
+        elif dial_call_status in ["no-answer", "busy", "failed"]:
+            update_callback_status(request_id, "failed", f"Business {dial_call_status}")
+
+            # Send SMS fallback to business
+            if twilio_client:
+                try:
+                    conn = sqlite3.connect(DATABASE_PATH)
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        SELECT visitor_name, visitor_phone
+                        FROM callbacks
+                        WHERE request_id = ?
+                    """, (request_id,))
+                    row = cursor.fetchone()
+                    conn.close()
+
+                    if row:
+                        visitor_name, visitor_phone = row
+                        message = twilio_client.messages.create(
+                            to=BUSINESS_NUMBER,
+                            from_=TWILIO_NUMBER,
+                            body=f"Missed callback from {visitor_name or 'visitor'} at {visitor_phone}. Visitor answered but business was {dial_call_status}. Please call back."
+                        )
+                        update_callback_status(request_id, "sms_sent", "SMS sent to business", sms_sid=message.sid)
+                        logger.info(f"SMS fallback sent: {message.sid}")
+                except Exception as e:
+                    logger.error(f"Failed to send SMS fallback: {str(e)}")
+
+        return "", 200
+
+    except Exception as e:
+        logger.error(f"Error in dial status callback: {str(e)}")
+        return "", 500
 
 
 @app.route("/twilio/status_callback", methods=["POST"])
