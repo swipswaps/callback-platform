@@ -500,14 +500,14 @@ if (logoutBtn) {
   // Fetch logs function
   async function fetchLogs() {
     const lines = document.getElementById('log-lines').value;
-    const since = document.getElementById('log-since').value;
+    const filter = document.getElementById('log-filter').value;
 
     refreshBtn.disabled = true;
     refreshBtn.textContent = '⏳ Loading...';
 
     try {
       const params = new URLSearchParams({ lines });
-      if (since) params.append('since', since);
+      if (filter) params.append('filter', filter);
 
       const response = await fetch(`${CONFIG.BACKEND_URL}/logs?${params}`);
       const data = await response.json();
@@ -515,7 +515,7 @@ if (logoutBtn) {
       if (data.success) {
         logOutput.value = data.logs || 'No logs available';
         logStatus.className = 'success';
-        logStatus.textContent = `✓ Loaded ${data.lines_requested} lines (since: ${data.since})`;
+        logStatus.textContent = `✓ Loaded ${data.lines_returned} of ${data.total_lines_in_file} lines (filter: ${data.filter})`;
       } else {
         logOutput.value = `Error: ${data.error}`;
         logStatus.className = 'error';

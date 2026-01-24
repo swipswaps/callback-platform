@@ -186,15 +186,17 @@
               <option value="100" selected>100</option>
               <option value="200">200</option>
               <option value="500">500</option>
+              <option value="1000">1000</option>
             </select>
           </label>
-          <label>Since:
-            <select id="log-since">
-              <option value="">All</option>
-              <option value="5m">5 min</option>
-              <option value="10m" selected>10 min</option>
-              <option value="30m">30 min</option>
-              <option value="1h">1 hour</option>
+          <label>Filter:
+            <select id="log-filter">
+              <option value="">All Logs</option>
+              <option value="twilio">Twilio</option>
+              <option value="oauth">OAuth</option>
+              <option value="error">Errors</option>
+              <option value="callback">Callbacks</option>
+              <option value="sms">SMS</option>
             </select>
           </label>
           <button id="refresh-logs">🔄 Refresh</button>

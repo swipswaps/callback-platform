@@ -1723,38 +1723,46 @@ def twilio_voicemail_status():
 @limiter.limit("10 per minute")
 def get_logs():
     """
-    Return recent application logs.
+    Return recent application logs from /tmp/app.log.
     Query params:
     - lines: number of lines to return (default: 100, max: 1000)
-    - since: time filter (e.g., '10m', '1h', '1d')
+    - filter: filter logs by keyword (e.g., 'twilio', 'oauth', 'error')
     """
     try:
         lines = min(int(request.args.get('lines', 100)), 1000)
-        since = request.args.get('since', '')
+        filter_keyword = request.args.get('filter', '').lower()
 
-        # Read logs from Docker container
-        import subprocess
+        # Read logs from file
+        log_file = "/tmp/app.log"
 
-        if since:
-            cmd = ['docker', 'logs', 'callback-backend', '--since', since]
-        else:
-            cmd = ['docker', 'logs', 'callback-backend', '--tail', str(lines)]
+        if not os.path.exists(log_file):
+            return jsonify({
+                'success': False,
+                'error': 'Log file not found'
+            }), 404
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-        logs = result.stdout + result.stderr
+        # Read last N lines from log file
+        with open(log_file, 'r') as f:
+            all_lines = f.readlines()
+
+        # Get last N lines
+        recent_lines = all_lines[-lines:] if len(all_lines) > lines else all_lines
+
+        # Apply filter if specified
+        if filter_keyword:
+            recent_lines = [line for line in recent_lines if filter_keyword in line.lower()]
+
+        logs = ''.join(recent_lines)
 
         return jsonify({
             'success': True,
             'logs': logs,
             'lines_requested': lines,
-            'since': since or 'N/A'
+            'lines_returned': len(recent_lines),
+            'filter': filter_keyword or 'none',
+            'total_lines_in_file': len(all_lines)
         }), 200
 
-    except subprocess.TimeoutExpired:
-        return jsonify({
-            'success': False,
-            'error': 'Log retrieval timed out'
-        }), 500
     except Exception as e:
         logger.error(f"Error retrieving logs: {str(e)}")
         return jsonify({

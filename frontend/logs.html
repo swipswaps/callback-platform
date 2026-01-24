@@ -178,19 +178,19 @@
             </div>
 
             <div class="control-group">
-                <label for="since">Since:</label>
-                <select id="since">
-                    <option value="">All</option>
-                    <option value="5m">5 minutes</option>
-                    <option value="10m" selected>10 minutes</option>
-                    <option value="30m">30 minutes</option>
-                    <option value="1h">1 hour</option>
-                    <option value="24h">24 hours</option>
+                <label for="filter">Filter:</label>
+                <select id="filter">
+                    <option value="">All Logs</option>
+                    <option value="twilio">Twilio</option>
+                    <option value="oauth">OAuth</option>
+                    <option value="error">Errors</option>
+                    <option value="callback">Callbacks</option>
+                    <option value="sms">SMS</option>
                 </select>
             </div>
 
             <button id="refreshBtn" onclick="fetchLogs()">🔄 Refresh</button>
-            
+
             <div class="auto-refresh">
                 <input type="checkbox" id="autoRefresh">
                 <label for="autoRefresh">Auto-refresh (10s)</label>
@@ -210,7 +210,7 @@
 
         async function fetchLogs() {
             const lines = document.getElementById('lines').value;
-            const since = document.getElementById('since').value;
+            const filter = document.getElementById('filter').value;
             const refreshBtn = document.getElementById('refreshBtn');
             const logOutput = document.getElementById('logOutput');
             const statusDiv = document.getElementById('status');
@@ -220,7 +220,7 @@
 
             try {
                 const params = new URLSearchParams({ lines });
-                if (since) params.append('since', since);
+                if (filter) params.append('filter', filter);
 
                 const response = await fetch(`${API_URL}/logs?${params}`);
                 const data = await response.json();
@@ -229,9 +229,9 @@
                     // Format logs with syntax highlighting
                     const formattedLogs = formatLogs(data.logs);
                     logOutput.innerHTML = formattedLogs || '<span style="color: #888;">No logs available</span>';
-                    
+
                     statusDiv.className = 'status success';
-                    statusDiv.textContent = `✓ Loaded ${data.lines_requested} lines (since: ${data.since})`;
+                    statusDiv.textContent = `✓ Loaded ${data.lines_returned} of ${data.total_lines_in_file} lines (filter: ${data.filter})`;
                 } else {
                     logOutput.textContent = `Error: ${data.error}`;
                     statusDiv.className = 'status error';
