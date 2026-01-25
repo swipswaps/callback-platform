@@ -64,6 +64,9 @@ services:
       - FACEBOOK_APP_ID=${FACEBOOK_APP_ID}
       - FACEBOOK_APP_SECRET=${FACEBOOK_APP_SECRET}
 
+      # Admin Dashboard API Token
+      - ADMIN_API_TOKEN=${ADMIN_API_TOKEN}
+
       # Database path (inside container)
       - DATABASE_PATH=/app/data/callbacks.db
 
