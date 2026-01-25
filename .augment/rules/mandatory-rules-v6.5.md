@@ -1,7 +1,7 @@
 ---
 # Mandatory Rules for AI Assistant Interactions
 
-**Version:** 6.5
+**Version:** 6.6
 **Status:** Authoritative
 **Scope:** Overrides all default assistant behavior
 **Applies to:** All reasoning, planning, execution, and output
@@ -142,6 +142,13 @@ Runtime changes require logs, verification, and confirmation.
 **v6.5 Addendum:**
 - Docker workflows must include pre-checks for required commands (`docker` vs `docker-compose`), environment variables, and rebuild necessity.
 - Logs must capture container startup, rebuild, and environment load verification.
+
+**v6.6 Addendum - Deployed Systems Protocol:**
+- When modifying deployed systems (frontend + backend), ALL components must be deployed atomically before task completion.
+- If GitHub Pages auto-deployment is configured (`.github/workflows/deploy-pages.yml`), changes MUST be committed and pushed to trigger deployment.
+- A task involving deployed systems is NOT complete until: (1) all code updated, (2) all containers rebuilt, (3) all changes committed and pushed, (4) deployment verified, (5) end-to-end tested.
+- Never leave a system in a broken state where backend and frontend are out of sync.
+- Git push is a DEPLOYMENT STEP when auto-deployment exists, not optional version control.
 
 ---
 

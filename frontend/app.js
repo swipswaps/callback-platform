@@ -23,6 +23,20 @@ const nameInput = document.getElementById("name");
 const emailInput = document.getElementById("email");
 const phoneInput = document.getElementById("phone");
 
+// Verification elements
+const verificationSection = document.getElementById("verification-section");
+const verificationPhoneEl = document.getElementById("verification-phone");
+const verificationCodeInput = document.getElementById("verification-code");
+const verifyBtn = document.getElementById("verify-btn");
+const resendBtn = document.getElementById("resend-btn");
+const cancelVerificationBtn = document.getElementById("cancel-verification-btn");
+const codeTimerEl = document.getElementById("code-timer");
+
+// Verification state
+let currentRequestId = null;
+let verificationTimer = null;
+let resendCooldown = null;
+
 // Logging utility
 function log(level, message, data = {}) {
   const timestamp = new Date().toISOString();
@@ -295,27 +309,26 @@ form.addEventListener("submit", async (e) => {
   log('info', 'Callback request submitted', { hasName: !!payload.name, hasEmail: !!payload.email, hasCaptcha: true });
 
   showStatus('info', '📞 Submitting callback request...');
-  
+
   try {
+    // Step 1: Submit callback request (does NOT initiate call yet)
     const res = await fetch(`${CONFIG.BACKEND_URL}/request_callback`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
-    
+
     const data = await res.json();
-    
+
     if (data.success) {
       log('info', 'Callback request successful', { requestId: data.request_id });
-      showStatus('success', '✓ Callback request received! Calling you now...');
+      currentRequestId = data.request_id;
 
-      // Reset reCAPTCHA for next submission
+      // Reset reCAPTCHA
       grecaptcha.reset();
 
-      // Start polling for status updates
-      if (data.request_id) {
-        pollCallbackStatus(data.request_id);
-      }
+      // Step 2: Send SMS verification code
+      await sendVerificationCode(data.request_id, payload.visitor_number);
     } else {
       log('error', 'Callback request failed', { error: data.error });
       showStatus('error', data.error || 'Failed to submit callback request');
@@ -330,6 +343,194 @@ form.addEventListener("submit", async (e) => {
     // Reset reCAPTCHA on network error
     grecaptcha.reset();
   }
+});
+
+// Verification functions
+async function sendVerificationCode(requestId, phone) {
+  try {
+    showStatus('info', '📱 Sending verification code to your phone...');
+
+    const res = await fetch(`${CONFIG.BACKEND_URL}/send_verification`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ request_id: requestId })
+    });
+
+    const data = await res.json();
+
+    if (data.success) {
+      log('info', 'Verification code sent', { requestId });
+      showVerificationUI(phone);
+      showStatus('success', '✓ Verification code sent! Check your phone.');
+      startVerificationTimer();
+    } else {
+      log('error', 'Failed to send verification code', { error: data.error });
+      showStatus('error', data.error || 'Failed to send verification code');
+    }
+  } catch (err) {
+    log('error', 'Network error sending verification code', { error: err.message });
+    showStatus('error', 'Network error. Please try again.');
+  }
+}
+
+function showVerificationUI(phone) {
+  // Hide form, show verification section
+  form.style.display = 'none';
+  verificationSection.style.display = 'block';
+  verificationPhoneEl.textContent = phone;
+  verificationCodeInput.value = '';
+  verificationCodeInput.focus();
+}
+
+function hideVerificationUI() {
+  // Show form, hide verification section
+  form.style.display = 'block';
+  verificationSection.style.display = 'none';
+  currentRequestId = null;
+  stopVerificationTimer();
+}
+
+function startVerificationTimer() {
+  let timeLeft = 600; // 10 minutes in seconds
+
+  function updateTimer() {
+    const minutes = Math.floor(timeLeft / 60);
+    const seconds = timeLeft % 60;
+    codeTimerEl.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+
+    if (timeLeft <= 0) {
+      clearInterval(verificationTimer);
+      codeTimerEl.textContent = 'EXPIRED';
+      codeTimerEl.style.color = 'var(--error-color)';
+      verifyBtn.disabled = true;
+    } else {
+      timeLeft--;
+    }
+  }
+
+  updateTimer();
+  verificationTimer = setInterval(updateTimer, 1000);
+}
+
+function stopVerificationTimer() {
+  if (verificationTimer) {
+    clearInterval(verificationTimer);
+    verificationTimer = null;
+  }
+  if (resendCooldown) {
+    clearTimeout(resendCooldown);
+    resendCooldown = null;
+  }
+}
+
+async function verifyCode() {
+  const code = verificationCodeInput.value.trim();
+
+  if (!code || code.length !== 6) {
+    showStatus('error', 'Please enter a 6-digit verification code');
+    return;
+  }
+
+  try {
+    showStatus('info', '🔍 Verifying code...');
+    verifyBtn.disabled = true;
+
+    const res = await fetch(`${CONFIG.BACKEND_URL}/verify_code`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request_id: currentRequestId,
+        code: code
+      })
+    });
+
+    const data = await res.json();
+
+    if (data.success) {
+      log('info', 'Verification successful', { requestId: currentRequestId });
+      showStatus('success', '✓ Verified! Initiating callback...');
+      stopVerificationTimer();
+
+      // Step 3: Initiate the actual callback
+      await initiateCallback(currentRequestId);
+    } else {
+      log('error', 'Verification failed', { error: data.error });
+      showStatus('error', data.error || 'Invalid verification code');
+      verifyBtn.disabled = false;
+    }
+  } catch (err) {
+    log('error', 'Network error during verification', { error: err.message });
+    showStatus('error', 'Network error. Please try again.');
+    verifyBtn.disabled = false;
+  }
+}
+
+async function initiateCallback(requestId) {
+  try {
+    showStatus('info', '📞 Calling you now...');
+
+    const res = await fetch(`${CONFIG.BACKEND_URL}/initiate_callback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ request_id: requestId })
+    });
+
+    const data = await res.json();
+
+    if (data.success) {
+      log('info', 'Callback initiated', { requestId });
+      showStatus('success', '✓ Calling you now! Please answer your phone.');
+      hideVerificationUI();
+
+      // Start polling for status updates
+      pollCallbackStatus(requestId);
+    } else {
+      log('error', 'Failed to initiate callback', { error: data.error });
+      showStatus('error', data.error || 'Failed to initiate callback');
+    }
+  } catch (err) {
+    log('error', 'Network error initiating callback', { error: err.message });
+    showStatus('error', 'Network error. Please try again.');
+  }
+}
+
+async function resendVerificationCode() {
+  if (!currentRequestId) return;
+
+  resendBtn.disabled = true;
+  await sendVerificationCode(currentRequestId, verificationPhoneEl.textContent);
+
+  // Cooldown before allowing resend again (30 seconds)
+  let cooldown = 30;
+  resendBtn.textContent = `🔄 Resend Code (${cooldown}s)`;
+
+  resendCooldown = setInterval(() => {
+    cooldown--;
+    if (cooldown <= 0) {
+      clearInterval(resendCooldown);
+      resendBtn.disabled = false;
+      resendBtn.textContent = '🔄 Resend Code';
+    } else {
+      resendBtn.textContent = `🔄 Resend Code (${cooldown}s)`;
+    }
+  }, 1000);
+}
+
+// Event listeners for verification
+verifyBtn.addEventListener('click', verifyCode);
+resendBtn.addEventListener('click', resendVerificationCode);
+cancelVerificationBtn.addEventListener('click', hideVerificationUI);
+
+// Allow Enter key to submit verification code
+verificationCodeInput.addEventListener('keypress', (e) => {
+  if (e.key === 'Enter') {
+    verifyCode();
+  }
+});
+
+// Auto-format verification code input (numeric only)
+verificationCodeInput.addEventListener('input', (e) => {
+  e.target.value = e.target.value.replace(/[^0-9]/g, '');
 });
 
 // Authentication functions

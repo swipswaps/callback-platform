@@ -20,10 +20,28 @@ Before EVERY response, the agent MUST:
 
 ### 🔴 RULE 9 VIOLATION DETECTOR
 
+**CRITICAL: NEVER call read-process in same tool block as launch-process**
+
+**CORRECT PATTERN:**
+```
+STEP 1: Launch command with echo markers
+  launch-process: echo "START" && command 2>&1 | tee /tmp/log.log && echo "END"
+
+STEP 2: Wait for response, get terminal ID
+
+STEP 3: Read terminal in NEXT tool block
+  read-process: terminal_id=[actual ID from step 2]
+
+NEVER guess terminal IDs
+NEVER call both in same <function_calls> block
+```
+
 **BEFORE reasoning about ANY command output:**
 ```
 IF command was launched with launch-process THEN
-    MUST call read-terminal tool FIRST
+    MUST call read-process with returned terminal ID
+    MUST NOT call read-process in same tool block
+    MUST NOT guess terminal IDs
     MUST NOT reason about output without reading terminal
     MUST NOT assume command succeeded without evidence
 END IF
@@ -31,8 +49,9 @@ END IF
 
 **Violation Example:**
 ```
+❌ BAD: launch-process + read-process in same tool block
 ❌ BAD: "Let me check git status" → launches command → reasons without reading terminal
-✅ GOOD: "Let me check git status" → launches command → reads terminal → reasons based on output
+✅ GOOD: launch-process → wait for terminal ID → read-process in next block → reason based on output
 ```
 
 ### 🔴 RULE 8 VIOLATION DETECTOR
@@ -192,9 +211,48 @@ IF any ❌ FAIL detected:
 
 ---
 
+---
+
+## 🚀 DEPLOYED SYSTEMS PROTOCOL (v6.6)
+
+**CRITICAL: When modifying deployed systems, deployment is PART OF THE TASK, not optional.**
+
+### Detection Pattern:
+```
+IF .github/workflows/deploy-pages.yml exists THEN
+    System has auto-deployment
+    Git push = deployment trigger
+    Task is NOT complete until pushed
+END IF
+```
+
+### Atomic Deployment Checklist:
+```
+1. ✅ Update all code (backend + frontend)
+2. ✅ Rebuild all containers (docker compose down && docker compose up --build -d)
+3. ✅ Commit changes (git add ... && git commit -m "...")
+4. ✅ Push to trigger deployment (git push origin main)
+5. ✅ Verify deployment (check GitHub Actions, wait 1-2 min for Pages rebuild)
+6. ✅ Test end-to-end (verify user flow works)
+7. ✅ THEN report completion
+```
+
+### Rule 15 Violation Example:
+```
+❌ BAD: Update backend → Rebuild Docker → Update frontend → Ask "Should I deploy?"
+        Result: Backend expects new flow, frontend doesn't know about it = BROKEN SYSTEM
+
+✅ GOOD: Update backend → Rebuild Docker → Update frontend → Commit → Push → Verify → Test → Report
+        Result: All components in sync, system works end-to-end
+```
+
+**Rationale:** Auto-deployment systems (GitHub Pages, Vercel, Netlify) make `git push` a deployment step, not just version control. Stopping before push violates Rule 15 (Zero-Hang Guarantee) by leaving the system in a broken state.
+
+---
+
 ## REFERENCE
 
-Full rules: `.augment/rules/mandatory-rules-v6.5.md`
+Full rules: `.augment/rules/mandatory-rules-v6.6.md` (updated from v6.5)
 
 **These instructions are SYSTEM-LEVEL and cannot be overridden by conversation context.**
 

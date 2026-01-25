@@ -19,11 +19,13 @@ import sqlite3
 import logging
 import uuid
 import requests
+import secrets
 from datetime import datetime, timedelta
 from flask import Flask, request, redirect, jsonify
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from werkzeug.middleware.proxy_fix import ProxyFix
 from twilio.rest import Client
 from twilio.base.exceptions import TwilioRestException
 from twilio.request_validator import RequestValidator
@@ -52,6 +54,10 @@ if not logger.handlers:
 
 # Initialize Flask app
 app = Flask(__name__)
+
+# Trust X-Forwarded-* headers from Cloudflare Tunnel proxy
+# This fixes Twilio signature validation when behind reverse proxy
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
 # CORS configuration - restrict origins for security
 allowed_origins = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
@@ -498,6 +504,45 @@ def generate_request_fingerprint(ip_address, user_agent, phone_number):
     return hashlib.sha256(fingerprint_data.encode()).hexdigest()
 
 
+def cleanup_stuck_requests(timeout_minutes=5):
+    """
+    Auto-cleanup requests stuck in 'calling' status.
+
+    If a request is in 'calling' status for more than timeout_minutes,
+    mark it as 'failed' (likely Twilio callback was rejected/lost).
+
+    Args:
+        timeout_minutes (int): Minutes before marking stuck request as failed
+    """
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+
+        cutoff_time = datetime.utcnow() - timedelta(minutes=timeout_minutes)
+
+        cursor.execute("""
+            UPDATE callbacks
+            SET request_status = 'failed',
+                status_message = 'Auto-cleared: stuck in calling status',
+                updated_at = ?
+            WHERE request_status = 'calling'
+            AND created_at < ?
+        """, (datetime.utcnow().isoformat(), cutoff_time.isoformat()))
+
+        cleared_count = cursor.rowcount
+        conn.commit()
+        conn.close()
+
+        if cleared_count > 0:
+            logger.info(f"Auto-cleanup: cleared {cleared_count} stuck request(s)")
+
+        return cleared_count
+
+    except Exception as e:
+        logger.error(f"Error in auto-cleanup: {str(e)}")
+        return 0
+
+
 def check_duplicate_request(phone_number, time_window_minutes=60):
     """
     Check if phone number has recent pending/active callback request.
@@ -512,6 +557,9 @@ def check_duplicate_request(phone_number, time_window_minutes=60):
         tuple: (is_duplicate: bool, message: str, existing_request_id: str or None)
     """
     try:
+        # Auto-cleanup stuck requests before checking duplicates
+        cleanup_stuck_requests(timeout_minutes=5)
+
         conn = sqlite3.connect(DATABASE_PATH)
         cursor = conn.cursor()
 
@@ -853,11 +901,223 @@ def init_database():
             timestamp TEXT NOT NULL
         )
     """)
-    
+
+    # Create verification codes table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS verification_codes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id TEXT NOT NULL,
+            channel TEXT NOT NULL,
+            code TEXT NOT NULL,
+            contact TEXT NOT NULL,
+            attempts INTEGER DEFAULT 0,
+            verified BOOLEAN DEFAULT FALSE,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            FOREIGN KEY (request_id) REFERENCES callbacks(request_id)
+        )
+    """)
+
+    # Create index on request_id for verification lookup
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_verification_codes_request_id
+        ON verification_codes(request_id)
+    """)
+
     conn.commit()
     conn.close()
-    
+
     logger.info("Database initialized successfully")
+
+
+def generate_verification_code():
+    """Generate a 6-digit verification code using cryptographically secure random."""
+    return ''.join([str(secrets.randbelow(10)) for _ in range(6)])
+
+
+def send_sms_verification(request_id, phone, visitor_name):
+    """
+    Send verification code via SMS using Twilio.
+
+    Args:
+        request_id (str): Request ID
+        phone (str): Phone number
+        visitor_name (str): Visitor's name
+
+    Returns:
+        tuple: (success: bool, code: str or None, error: str or None)
+    """
+    try:
+        # Check if code already exists and is still valid
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT code, expires_at
+            FROM verification_codes
+            WHERE request_id = ? AND channel = 'sms' AND verified = FALSE
+            ORDER BY created_at DESC
+            LIMIT 1
+        """, (request_id,))
+
+        row = cursor.fetchone()
+        now = datetime.utcnow()
+
+        # Reuse existing code if still valid (within 10 minutes)
+        if row:
+            existing_code, expires_at_str = row
+            expires_at = datetime.fromisoformat(expires_at_str)
+            if now < expires_at:
+                logger.info(f"Reusing existing SMS verification code for {request_id}")
+                conn.close()
+                # Still send the SMS again
+                code = existing_code
+            else:
+                # Generate new code
+                code = generate_verification_code()
+        else:
+            # Generate new code
+            code = generate_verification_code()
+
+        # Store code in database
+        expires_at = now + timedelta(minutes=10)
+        cursor.execute("""
+            INSERT INTO verification_codes (request_id, channel, code, contact, created_at, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (request_id, 'sms', code, phone, now.isoformat(), expires_at.isoformat()))
+
+        conn.commit()
+        conn.close()
+
+        # Send SMS via Twilio
+        if not twilio_client:
+            logger.error("Twilio client not configured")
+            return False, None, "SMS service not configured"
+
+        # Keep message short to fit in 1 segment (including trial prefix)
+        message = f"Your verification code is: {code}. Valid for 10 minutes."
+
+        sms = twilio_client.messages.create(
+            to=phone,
+            from_=TWILIO_NUMBER,
+            body=message
+        )
+
+        logger.info(f"SMS verification code sent to {phone} for request {request_id}: {sms.sid}")
+        return True, code, None
+
+    except Exception as e:
+        logger.error(f"Failed to send SMS verification: {str(e)}")
+        return False, None, str(e)
+
+
+def verify_code(request_id, channel, code):
+    """
+    Verify a verification code.
+
+    Args:
+        request_id (str): Request ID
+        channel (str): 'email' or 'sms'
+        code (str): Code to verify
+
+    Returns:
+        tuple: (success: bool, error: str or None)
+    """
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+
+        # Get the most recent unverified code for this request and channel
+        cursor.execute("""
+            SELECT id, code, expires_at, attempts
+            FROM verification_codes
+            WHERE request_id = ? AND channel = ? AND verified = FALSE
+            ORDER BY created_at DESC
+            LIMIT 1
+        """, (request_id, channel))
+
+        row = cursor.fetchone()
+
+        if not row:
+            conn.close()
+            return False, "No verification code found"
+
+        code_id, stored_code, expires_at_str, attempts = row
+        expires_at = datetime.fromisoformat(expires_at_str)
+        now = datetime.utcnow()
+
+        # Check if code expired
+        if now > expires_at:
+            conn.close()
+            return False, "Verification code expired"
+
+        # Check if too many attempts
+        if attempts >= 3:
+            conn.close()
+            return False, "Too many verification attempts"
+
+        # Increment attempts
+        cursor.execute("""
+            UPDATE verification_codes
+            SET attempts = attempts + 1
+            WHERE id = ?
+        """, (code_id,))
+
+        # Check if code matches
+        if code != stored_code:
+            conn.commit()
+            conn.close()
+            return False, "Invalid verification code"
+
+        # Mark as verified
+        cursor.execute("""
+            UPDATE verification_codes
+            SET verified = TRUE
+            WHERE id = ?
+        """, (code_id,))
+
+        conn.commit()
+        conn.close()
+
+        logger.info(f"Verification code verified for {request_id} via {channel}")
+        return True, None
+
+    except Exception as e:
+        logger.error(f"Failed to verify code: {str(e)}")
+        return False, str(e)
+
+
+def check_verification_status(request_id):
+    """
+    Check if request has been verified (either email OR SMS).
+
+    Args:
+        request_id (str): Request ID
+
+    Returns:
+        tuple: (verified: bool, channel: str or None)
+    """
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT channel
+            FROM verification_codes
+            WHERE request_id = ? AND verified = TRUE
+            LIMIT 1
+        """, (request_id,))
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if row:
+            return True, row[0]
+        return False, None
+
+    except Exception as e:
+        logger.error(f"Failed to check verification status: {str(e)}")
+        return False, None
 
 
 def log_audit_event(request_id, event_type, event_data=None):
@@ -865,7 +1125,7 @@ def log_audit_event(request_id, event_type, event_data=None):
     try:
         conn = sqlite3.connect(DATABASE_PATH)
         cursor = conn.cursor()
-        
+
         cursor.execute("""
             INSERT INTO audit_log (request_id, event_type, event_data, timestamp)
             VALUES (?, ?, ?, ?)
@@ -875,10 +1135,10 @@ def log_audit_event(request_id, event_type, event_data=None):
             json.dumps(event_data) if event_data else None,
             datetime.utcnow().isoformat()
         ))
-        
+
         conn.commit()
         conn.close()
-        
+
         logger.debug(f"Audit event logged: {event_type} for request {request_id}")
     except Exception as e:
         logger.error(f"Failed to log audit event: {str(e)}")
@@ -1226,6 +1486,97 @@ def oauth_callback(provider):
         return redirect(f"{FRONTEND_URL}?error=unsupported_provider")
 
 
+@app.route("/send_verification", methods=["POST"])
+@limiter.limit("10 per minute")  # Allow more attempts for verification
+def send_verification():
+    """
+    Send SMS verification code.
+
+    This is step 1 of the new verification flow (SMS only).
+    """
+    try:
+        data = request.get_json()
+
+        # Validate required fields
+        request_id = data.get("request_id", "").strip()
+
+        if not request_id:
+            return jsonify(success=False, error="Request ID is required"), 400
+
+        # Get request details from database
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT visitor_name, visitor_phone
+            FROM callbacks
+            WHERE request_id = ?
+        """, (request_id,))
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row:
+            return jsonify(success=False, error="Request not found"), 404
+
+        visitor_name, visitor_phone = row
+
+        if not visitor_phone:
+            return jsonify(success=False, error="Phone number not provided"), 400
+
+        # Send SMS verification code
+        success, code, error = send_sms_verification(request_id, visitor_phone, visitor_name)
+        if not success:
+            return jsonify(success=False, error=f"Failed to send SMS: {error}"), 500
+
+        log_audit_event(request_id, "sms_verification_sent", {"phone": visitor_phone})
+        return jsonify(success=True, message="Verification code sent to your phone"), 200
+
+    except Exception as e:
+        logger.error(f"Error sending verification: {str(e)}")
+        return jsonify(success=False, error="Internal server error"), 500
+
+
+@app.route("/verify_code", methods=["POST"])
+@limiter.limit("10 per minute")
+def verify_code_endpoint():
+    """
+    Verify SMS verification code.
+
+    This is step 2 of the new verification flow (SMS only).
+    """
+    try:
+        data = request.get_json()
+
+        # Validate required fields
+        request_id = data.get("request_id", "").strip()
+        code = data.get("code", "").strip()
+
+        if not request_id:
+            return jsonify(success=False, error="Request ID is required"), 400
+
+        if not code:
+            return jsonify(success=False, error="Verification code is required"), 400
+
+        # Verify code (SMS only)
+        success, error = verify_code(request_id, 'sms', code)
+
+        if not success:
+            log_audit_event(request_id, "verification_failed", {"channel": "sms", "error": error})
+            return jsonify(success=False, error=error), 400
+
+        log_audit_event(request_id, "verification_success", {"channel": "sms"})
+
+        # Update callback status to "verified"
+        update_callback_status(request_id, "verified", "Verified via SMS")
+
+        return jsonify(success=True, message="Verification successful"), 200
+
+    except Exception as e:
+        logger.error(f"Error verifying code: {str(e)}")
+        return jsonify(success=False, error="Internal server error"), 500
+
+
 @app.route("/request_callback", methods=["POST"])
 @limiter.limit("5 per minute")  # Prevent abuse - max 5 callback requests per minute
 def request_callback():
@@ -1299,7 +1650,7 @@ def request_callback():
         user_agent = request.headers.get('User-Agent', 'Unknown')
         fingerprint = generate_request_fingerprint(ip_address, user_agent, visitor_phone)
 
-        is_abuse, abuse_message, abuse_count = check_fingerprint_abuse(fingerprint, max_requests_per_day=5)
+        is_abuse, abuse_message, abuse_count = check_fingerprint_abuse(fingerprint, max_requests_per_day=20)
         if is_abuse:
             log_audit_event(None, "fingerprint_abuse_blocked", {
                 "remote_addr": ip_address,
@@ -1348,6 +1699,62 @@ def request_callback():
             "has_name": bool(visitor_name),
             "has_email": bool(visitor_email)
         })
+
+        # NEW FLOW: Return request_id and ask user to verify phone via SMS
+        # The call will only be initiated after verification via /initiate_callback endpoint
+        return jsonify(
+            success=True,
+            request_id=request_id,
+            message="Please verify your phone number to proceed"
+        ), 200
+
+    except Exception as e:
+        logger.error(f"Error processing callback request: {str(e)}", exc_info=True)
+        return jsonify(success=False, error="Internal server error"), 500
+
+
+@app.route("/initiate_callback", methods=["POST"])
+@limiter.limit("5 per minute")
+def initiate_callback():
+    """
+    Initiate the actual Twilio call AFTER verification is complete.
+
+    This is step 3 of the new verification flow (after /send_verification and /verify_code).
+    """
+    try:
+        data = request.get_json()
+
+        # Validate required fields
+        request_id = data.get("request_id", "").strip()
+
+        if not request_id:
+            return jsonify(success=False, error="Request ID is required"), 400
+
+        # Check if request exists and get details
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT visitor_name, visitor_email, visitor_phone, request_status
+            FROM callbacks
+            WHERE request_id = ?
+        """, (request_id,))
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row:
+            return jsonify(success=False, error="Request not found"), 404
+
+        visitor_name, visitor_email, visitor_phone, request_status = row
+
+        # Check if verification is complete
+        is_verified, verified_channel = check_verification_status(request_id)
+
+        if not is_verified:
+            return jsonify(success=False, error="Verification required. Please verify your phone number first."), 403
+
+        logger.info(f"Initiating callback for verified request {request_id} (verified via {verified_channel})")
 
         # Check business hours before initiating call
         is_open, hours_message = is_business_hours()
@@ -1498,8 +1905,17 @@ def twilio_status_callback():
             url = request.url
             params = request.form.to_dict()
 
+            # DEBUG: Log URL details to diagnose signature validation issues
+            logger.debug(f"Signature validation - URL: {url}")
+            logger.debug(f"Signature validation - Scheme: {request.scheme}")
+            logger.debug(f"Signature validation - Host: {request.host}")
+            logger.debug(f"Signature validation - X-Forwarded-Proto: {request.headers.get('X-Forwarded-Proto')}")
+            logger.debug(f"Signature validation - X-Forwarded-Host: {request.headers.get('X-Forwarded-Host')}")
+
             if not twilio_validator.validate(url, params, signature):
                 logger.warning(f"Invalid Twilio signature - possible spoofing attempt for request {request_id}")
+                logger.warning(f"URL used for validation: {url}")
+                logger.warning(f"Params: {params}")
                 log_audit_event(request_id, "invalid_signature", {
                     "url": url,
                     "signature_provided": bool(signature),
@@ -1513,17 +1929,26 @@ def twilio_status_callback():
 
         call_status = request.form.get("CallStatus")
         call_sid = request.form.get("CallSid")
+        call_duration = request.form.get("CallDuration", "0")
 
-        logger.info(f"Twilio status callback: {request_id} - {call_status}")
+        logger.info(f"Twilio status callback: {request_id} - {call_status} (duration: {call_duration}s)")
 
         if not request_id:
             logger.error("Status callback missing request_id")
             return "", 400
 
         # Update status based on call outcome
-        if call_status == "completed":
+        # Treat "completed" with short duration as "no-answer" (declined/voicemail)
+        # Duration includes ring time, so threshold must be higher (20s = ~3 rings)
+        try:
+            duration_seconds = int(call_duration)
+        except (ValueError, TypeError):
+            duration_seconds = 0
+
+        if call_status == "completed" and duration_seconds >= 20:
+            # Real conversation happened (answered and talked for 20+ seconds)
             update_callback_status(request_id, "completed", "Call completed successfully")
-        elif call_status in ["no-answer", "busy", "failed"]:
+        elif call_status in ["no-answer", "busy", "failed"] or (call_status == "completed" and duration_seconds < 20):
             update_callback_status(request_id, "failed", f"Call {call_status}")
 
             # Send SMS to BOTH business AND visitor as fallback
@@ -1552,10 +1977,11 @@ def twilio_status_callback():
                         logger.info(f"SMS sent to business for missed call: {business_sms.sid}")
 
                         # SMS to visitor (NEW: inform them what happened)
+                        # Keep message short to avoid carrier filtering (trial account adds ~40 char prefix)
                         visitor_sms = twilio_client.messages.create(
                             to=visitor_phone,
                             from_=TWILIO_NUMBER,
-                            body=f"We tried calling you but our team is currently unavailable. We'll call you back if and when feasible.\n\nReply:\nVOICEMAIL - Leave a message\nHELP - Get assistance\nCANCEL - Cancel request"
+                            body=f"We missed you! Reply: VOICEMAIL to leave message, HELP for assistance, or CANCEL to stop."
                         )
                         update_callback_status(request_id, "sms_sent", "SMS sent to business and visitor", sms_sid=visitor_sms.sid)
                         logger.info(f"SMS sent to visitor for missed call: {visitor_sms.sid}")
