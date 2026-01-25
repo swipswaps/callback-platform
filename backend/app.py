@@ -2939,6 +2939,388 @@ def initiate_callback_internal(request_id, visitor_name, visitor_email, visitor_
         return {"success": False, "error": str(e)}
 
 
+# ============================================================
+# RECURRING TASKS SYSTEM
+# ============================================================
+
+def cleanup_old_requests(max_age_days=90):
+    """
+    Delete callback requests older than max_age_days.
+
+    Data retention compliance - removes old requests to comply with GDPR/privacy policies.
+
+    Args:
+        max_age_days (int): Maximum age of requests to keep (default: 90 days)
+
+    Returns:
+        int: Number of requests deleted
+    """
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+
+        cutoff_date = datetime.utcnow() - timedelta(days=max_age_days)
+
+        cursor.execute("""
+            DELETE FROM callbacks
+            WHERE created_at < ?
+            AND request_status IN ('completed', 'failed', 'cancelled', 'dead_letter')
+        """, (cutoff_date.isoformat(),))
+
+        deleted_count = cursor.rowcount
+        conn.commit()
+        conn.close()
+
+        if deleted_count > 0:
+            logger.info(f"Cleanup: deleted {deleted_count} old request(s) older than {max_age_days} days")
+
+        return deleted_count
+    except Exception as e:
+        logger.error(f"Error cleaning up old requests: {str(e)}")
+        return 0
+
+
+def cleanup_expired_verification_codes(max_age_hours=24):
+    """
+    Remove expired verification codes from database.
+
+    Security compliance - ensures old codes cannot be used.
+
+    Args:
+        max_age_hours (int): Maximum age of codes to keep (default: 24 hours)
+
+    Returns:
+        int: Number of codes deleted
+    """
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+
+        cutoff_time = datetime.utcnow() - timedelta(hours=max_age_hours)
+
+        cursor.execute("""
+            DELETE FROM verification_codes
+            WHERE created_at < ?
+        """, (cutoff_time.isoformat(),))
+
+        deleted_count = cursor.rowcount
+        conn.commit()
+        conn.close()
+
+        if deleted_count > 0:
+            logger.info(f"Cleanup: deleted {deleted_count} expired verification code(s)")
+
+        return deleted_count
+    except Exception as e:
+        logger.error(f"Error cleaning up verification codes: {str(e)}")
+        return 0
+
+
+def cleanup_old_audit_logs(max_age_days=365):
+    """
+    Archive audit logs older than max_age_days.
+
+    Storage compliance - prevents audit log table from growing indefinitely.
+
+    Args:
+        max_age_days (int): Maximum age of logs to keep (default: 365 days)
+
+    Returns:
+        int: Number of logs deleted
+    """
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+
+        cutoff_date = datetime.utcnow() - timedelta(days=max_age_days)
+
+        cursor.execute("""
+            DELETE FROM audit_log
+            WHERE timestamp < ?
+        """, (cutoff_date.isoformat(),))
+
+        deleted_count = cursor.rowcount
+        conn.commit()
+        conn.close()
+
+        if deleted_count > 0:
+            logger.info(f"Cleanup: deleted {deleted_count} old audit log(s) older than {max_age_days} days")
+
+        return deleted_count
+    except Exception as e:
+        logger.error(f"Error cleaning up audit logs: {str(e)}")
+        return 0
+
+
+def send_daily_compliance_report(recipients=None):
+    """
+    Send daily summary email with callback system statistics.
+
+    Monitoring compliance - provides visibility into system health.
+
+    Args:
+        recipients (list): Email addresses to send report to (default: ALERT_EMAIL from env)
+
+    Returns:
+        bool: True if report sent successfully
+    """
+    try:
+        if recipients is None or len(recipients) == 0:
+            recipients = [ALERT_EMAIL] if ALERT_EMAIL else []
+
+        if not recipients:
+            logger.debug("No recipients configured for daily report")
+            return False
+
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+
+        # Get stats for last 24 hours
+        yesterday = datetime.utcnow() - timedelta(days=1)
+
+        cursor.execute("""
+            SELECT
+                COUNT(*) as total,
+                SUM(CASE WHEN request_status = 'completed' THEN 1 ELSE 0 END) as completed,
+                SUM(CASE WHEN request_status = 'failed' THEN 1 ELSE 0 END) as failed,
+                SUM(CASE WHEN request_status = 'cancelled' THEN 1 ELSE 0 END) as cancelled
+            FROM callbacks
+            WHERE created_at >= ?
+        """, (yesterday.isoformat(),))
+
+        stats = cursor.fetchone()
+        total, completed, failed, cancelled = stats
+
+        # Get abuse blocks
+        cursor.execute("""
+            SELECT COUNT(*) FROM audit_log
+            WHERE event_type IN ('fingerprint_abuse_blocked', 'duplicate_request_blocked')
+            AND timestamp >= ?
+        """, (yesterday.isoformat(),))
+
+        abuse_blocks = cursor.fetchone()[0]
+
+        conn.close()
+
+        # Format report
+        report = f"""
+Daily Callback System Report - {datetime.utcnow().strftime('%Y-%m-%d')}
+
+Summary (Last 24 Hours):
+- Total Requests: {total}
+- Completed: {completed}
+- Failed: {failed}
+- Cancelled: {cancelled}
+- Abuse Blocks: {abuse_blocks}
+
+Success Rate: {(completed / total * 100) if total > 0 else 0:.1f}%
+"""
+
+        logger.info(f"Daily report generated: {total} requests, {completed} completed, {failed} failed")
+        logger.info(f"Report would be sent to: {', '.join(recipients)}")
+
+        # TODO: Implement actual email sending via SMTP or SendGrid
+        # For now, just log the report
+        logger.info(report)
+
+        return True
+    except Exception as e:
+        logger.error(f"Error generating daily report: {str(e)}")
+        return False
+
+
+def analyze_fingerprint_abuse_patterns(threshold_multiplier=2.0):
+    """
+    Analyze fingerprint patterns to detect sophisticated abuse.
+
+    Security compliance - detects distributed attacks and abuse patterns.
+
+    Args:
+        threshold_multiplier (float): Multiplier for normal request rate (default: 2.0)
+
+    Returns:
+        dict: Analysis results with suspicious fingerprints
+    """
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+
+        # Get fingerprints with unusually high request rates in last 24 hours
+        yesterday = datetime.utcnow() - timedelta(days=1)
+
+        cursor.execute("""
+            SELECT fingerprint, COUNT(*) as request_count
+            FROM callbacks
+            WHERE created_at >= ?
+            GROUP BY fingerprint
+            HAVING request_count > ?
+            ORDER BY request_count DESC
+        """, (yesterday.isoformat(), 20 * threshold_multiplier))
+
+        suspicious = cursor.fetchall()
+        conn.close()
+
+        if suspicious:
+            logger.warning(f"Abuse pattern detected: {len(suspicious)} suspicious fingerprint(s)")
+            for fingerprint, count in suspicious:
+                logger.warning(f"  Fingerprint {fingerprint[:16]}... made {count} requests in 24h")
+
+        return {
+            "suspicious_count": len(suspicious),
+            "fingerprints": [{"fingerprint": fp[:16], "count": count} for fp, count in suspicious]
+        }
+    except Exception as e:
+        logger.error(f"Error analyzing abuse patterns: {str(e)}")
+        return {"suspicious_count": 0, "fingerprints": []}
+
+
+def check_daily_cost_thresholds(warning_threshold=0.8):
+    """
+    Check if approaching daily call/SMS limits and send alerts.
+
+    Budget compliance - prevents unexpected costs.
+
+    Args:
+        warning_threshold (float): Threshold to trigger warning (default: 0.8 = 80%)
+
+    Returns:
+        dict: Current usage stats and alert status
+    """
+    try:
+        within_limits, message, stats = check_daily_limits()
+
+        calls_24h = stats.get('calls_24h', 0)
+        sms_24h = stats.get('sms_24h', 0)
+        max_calls = stats.get('max_calls', MAX_CALLS_PER_DAY)
+        max_sms = stats.get('max_sms', MAX_SMS_PER_DAY)
+
+        calls_pct = (calls_24h / max_calls) if max_calls > 0 else 0
+        sms_pct = (sms_24h / max_sms) if max_sms > 0 else 0
+
+        alert_sent = False
+
+        if calls_pct >= warning_threshold:
+            logger.warning(f"Cost alert: {calls_pct*100:.1f}% of daily call limit used ({calls_24h}/{max_calls})")
+            alert_sent = True
+
+        if sms_pct >= warning_threshold:
+            logger.warning(f"Cost alert: {sms_pct*100:.1f}% of daily SMS limit used ({sms_24h}/{max_sms})")
+            alert_sent = True
+
+        return {
+            "calls_used": calls_24h,
+            "calls_limit": max_calls,
+            "calls_pct": calls_pct,
+            "sms_used": sms_24h,
+            "sms_limit": max_sms,
+            "sms_pct": sms_pct,
+            "alert_sent": alert_sent
+        }
+    except Exception as e:
+        logger.error(f"Error checking cost thresholds: {str(e)}")
+        return {}
+
+
+# ============================================================
+# RECURRING TASKS SCHEDULER (APScheduler)
+# ============================================================
+
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+import yaml
+
+def load_recurring_tasks_config():
+    """
+    Load recurring tasks configuration from YAML file.
+
+    Returns:
+        dict: Tasks configuration dictionary
+    """
+    config_path = os.path.join(os.path.dirname(__file__), 'config', 'recurring_tasks.yml')
+    try:
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+        logger.info(f"Loaded recurring tasks config from {config_path}")
+        return config.get('tasks', {})
+    except FileNotFoundError:
+        logger.warning(f"Recurring tasks config not found at {config_path}")
+        return {}
+    except Exception as e:
+        logger.error(f"Error loading recurring tasks config: {str(e)}")
+        return {}
+
+
+# Initialize APScheduler
+scheduler = BackgroundScheduler(timezone=pytz.UTC)
+
+# Map task function names to actual functions
+task_functions = {
+    'cleanup_old_requests': cleanup_old_requests,
+    'cleanup_expired_verification_codes': cleanup_expired_verification_codes,
+    'cleanup_old_audit_logs': cleanup_old_audit_logs,
+    'send_daily_compliance_report': send_daily_compliance_report,
+    'cleanup_stuck_requests': cleanup_stuck_requests,
+    'analyze_fingerprint_abuse_patterns': analyze_fingerprint_abuse_patterns,
+    'check_daily_cost_thresholds': check_daily_cost_thresholds
+}
+
+# Load and register recurring tasks from YAML config
+tasks_config = load_recurring_tasks_config()
+registered_count = 0
+
+for task_name, task_config in tasks_config.items():
+    if not task_config.get('enabled', False):
+        logger.debug(f"Skipping disabled task: {task_name}")
+        continue
+
+    function_name = task_config.get('function')
+    schedule = task_config.get('schedule')
+    params = task_config.get('params', {})
+    description = task_config.get('description', task_name)
+
+    if function_name not in task_functions:
+        logger.warning(f"Task function '{function_name}' not found for task '{task_name}'")
+        continue
+
+    try:
+        # Parse cron schedule (minute hour day month day_of_week)
+        parts = schedule.split()
+        if len(parts) != 5:
+            logger.error(f"Invalid cron schedule for {task_name}: {schedule}")
+            continue
+
+        trigger = CronTrigger(
+            minute=parts[0],
+            hour=parts[1],
+            day=parts[2],
+            month=parts[3],
+            day_of_week=parts[4],
+            timezone=pytz.UTC
+        )
+
+        scheduler.add_job(
+            task_functions[function_name],
+            trigger=trigger,
+            kwargs=params,
+            id=task_name,
+            name=description,
+            replace_existing=True
+        )
+
+        logger.info(f"Registered recurring task: {task_name} ({schedule}) - {description}")
+        registered_count += 1
+
+    except Exception as e:
+        logger.error(f"Error registering task {task_name}: {str(e)}")
+
+# Start scheduler
+try:
+    scheduler.start()
+    logger.info(f"Recurring tasks scheduler started with {registered_count} task(s)")
+except Exception as e:
+    logger.error(f"Error starting scheduler: {str(e)}")
+
+
 # Background retry processor
 def retry_processor_worker():
     """

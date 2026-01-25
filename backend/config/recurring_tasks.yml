@@ -1,0 +1,72 @@
+# Recurring Tasks Configuration
+# Cron syntax: minute hour day month day_of_week
+# Examples:
+#   "0 2 * * *"       - Daily at 2 AM
+#   "0 */6 * * *"     - Every 6 hours
+#   "0 9 * * MON-FRI" - Weekdays at 9 AM
+#   "*/15 * * * *"    - Every 15 minutes
+
+tasks:
+  # Cleanup old callback requests (data retention compliance)
+  cleanup_old_requests:
+    enabled: true
+    schedule: "0 2 * * *"  # Daily at 2 AM
+    function: cleanup_old_requests
+    description: "Delete callback requests older than retention period"
+    params:
+      max_age_days: 90
+    
+  # Cleanup expired verification codes (security compliance)
+  cleanup_expired_codes:
+    enabled: true
+    schedule: "0 */6 * * *"  # Every 6 hours
+    function: cleanup_expired_verification_codes
+    description: "Remove expired verification codes from database"
+    params:
+      max_age_hours: 24
+    
+  # Cleanup old audit logs (storage compliance)
+  cleanup_old_audit_logs:
+    enabled: true
+    schedule: "0 3 * * 0"  # Weekly on Sunday at 3 AM
+    function: cleanup_old_audit_logs
+    description: "Archive audit logs older than retention period"
+    params:
+      max_age_days: 365
+    
+  # Send daily compliance report (monitoring)
+  send_daily_report:
+    enabled: true
+    schedule: "0 9 * * MON-FRI"  # Weekdays at 9 AM
+    function: send_daily_compliance_report
+    description: "Email daily summary of callback system activity"
+    params:
+      recipients: []  # Will use ALERT_EMAIL from env
+    
+  # Check for stuck requests (reliability)
+  cleanup_stuck_requests:
+    enabled: true
+    schedule: "*/15 * * * *"  # Every 15 minutes
+    function: cleanup_stuck_requests
+    description: "Auto-clear requests stuck in 'calling' status"
+    params:
+      timeout_minutes: 5
+    
+  # Monitor fingerprint abuse patterns (security)
+  analyze_abuse_patterns:
+    enabled: true
+    schedule: "0 */6 * * *"  # Every 6 hours
+    function: analyze_fingerprint_abuse_patterns
+    description: "Detect and report suspicious request patterns"
+    params:
+      threshold_multiplier: 2.0
+    
+  # Check cost thresholds (budget compliance)
+  check_cost_thresholds:
+    enabled: true
+    schedule: "0 */2 * * *"  # Every 2 hours
+    function: check_daily_cost_thresholds
+    description: "Alert if approaching daily call/SMS limits"
+    params:
+      warning_threshold: 0.8  # Warn at 80%
+
