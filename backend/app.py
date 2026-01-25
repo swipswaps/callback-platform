@@ -554,7 +554,7 @@ def check_duplicate_request(phone_number, time_window_minutes=60):
         time_window_minutes (int): Time window in minutes (default: 60)
 
     Returns:
-        tuple: (is_duplicate: bool, message: str, existing_request_id: str or None)
+        tuple: (is_duplicate: bool, message: str, existing_request_id: str or None, remaining_minutes: float)
     """
     try:
         # Auto-cleanup stuck requests before checking duplicates
@@ -566,13 +566,13 @@ def check_duplicate_request(phone_number, time_window_minutes=60):
         # Calculate cutoff time
         cutoff_time = datetime.utcnow() - timedelta(minutes=time_window_minutes)
 
-        # Check for recent requests from this phone number
+        # Check for recent requests from this phone number (exclude cancelled)
         cursor.execute("""
             SELECT request_id, request_status, created_at
             FROM callbacks
             WHERE visitor_phone = ?
             AND created_at > ?
-            AND request_status IN ('pending', 'calling', 'connected')
+            AND request_status IN ('pending', 'calling', 'connected', 'verified')
             ORDER BY created_at DESC
             LIMIT 1
         """, (phone_number, cutoff_time.isoformat()))
@@ -581,11 +581,17 @@ def check_duplicate_request(phone_number, time_window_minutes=60):
         conn.close()
 
         if result:
-            request_id, status, created_at = result
+            request_id, status, created_at_str = result
             logger.warning(f"Duplicate request detected for {phone_number}: existing {request_id} ({status})")
-            return True, f"You already have a {status} callback request. Please wait.", request_id
 
-        return False, "", None
+            # Calculate time remaining until user can retry
+            created_at = datetime.fromisoformat(created_at_str)
+            elapsed_minutes = (datetime.utcnow() - created_at).total_seconds() / 60
+            remaining_minutes = max(0, time_window_minutes - elapsed_minutes)
+
+            return True, f"You already have a {status} callback request. Please wait.", request_id, remaining_minutes
+
+        return False, "", None, 0
 
     except Exception as e:
         logger.error(f"Error checking duplicate request: {str(e)}")
@@ -1637,13 +1643,20 @@ def request_callback():
             return jsonify(success=False, error=limit_message), 503  # 503 Service Unavailable
 
         # SECURITY LAYER 4: Check for duplicate requests (same phone number)
-        is_duplicate, dup_message, existing_id = check_duplicate_request(visitor_phone, time_window_minutes=60)
+        is_duplicate, dup_message, existing_id, remaining_minutes = check_duplicate_request(visitor_phone, time_window_minutes=60)
         if is_duplicate:
             log_audit_event(existing_id, "duplicate_request_blocked", {
                 "remote_addr": request.remote_addr,
-                "visitor_phone": visitor_phone
+                "visitor_phone": visitor_phone,
+                "remaining_minutes": remaining_minutes
             })
-            return jsonify(success=False, error=dup_message), 429  # 429 Too Many Requests
+            return jsonify(
+                success=False,
+                error=dup_message,
+                existing_request_id=existing_id,
+                remaining_minutes=int(remaining_minutes),
+                can_cancel=True
+            ), 429  # 429 Too Many Requests
 
         # SECURITY LAYER 5: Generate and check request fingerprint
         ip_address = request.remote_addr
@@ -1852,6 +1865,66 @@ def initiate_callback():
 
     except Exception as e:
         logger.error(f"Error processing callback request: {str(e)}", exc_info=True)
+        return jsonify(success=False, error="Internal server error"), 500
+
+
+@app.route("/cancel_request", methods=["POST"])
+@limiter.limit("10 per minute")
+def cancel_request():
+    """
+    Cancel a pending callback request.
+
+    Allows users to cancel their pending request so they can submit a new one.
+    """
+    try:
+        data = request.get_json()
+        request_id = data.get("request_id", "").strip()
+
+        if not request_id:
+            return jsonify(success=False, error="Request ID is required"), 400
+
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+
+        # Check if request exists and is cancellable
+        cursor.execute("""
+            SELECT request_status, visitor_phone
+            FROM callbacks
+            WHERE request_id = ?
+        """, (request_id,))
+
+        row = cursor.fetchone()
+
+        if not row:
+            conn.close()
+            return jsonify(success=False, error="Request not found"), 404
+
+        status, visitor_phone = row
+
+        # Only allow cancellation of pending/calling requests
+        if status not in ['pending', 'calling', 'verified']:
+            conn.close()
+            return jsonify(success=False, error=f"Cannot cancel {status} request"), 400
+
+        # Update status to cancelled
+        cursor.execute("""
+            UPDATE callbacks
+            SET request_status = 'cancelled',
+                status_message = 'Cancelled by user',
+                updated_at = ?
+            WHERE request_id = ?
+        """, (datetime.utcnow().isoformat(), request_id))
+
+        conn.commit()
+        conn.close()
+
+        logger.info(f"Request cancelled by user: {request_id} (phone: {visitor_phone})")
+        log_audit_event(request_id, "request_cancelled", {"phone": visitor_phone})
+
+        return jsonify(success=True, message="Request cancelled successfully"), 200
+
+    except Exception as e:
+        logger.error(f"Error cancelling request: {str(e)}")
         return jsonify(success=False, error="Internal server error"), 500
 
 
