@@ -99,6 +99,9 @@ MAX_CALLS_PER_DAY = int(os.environ.get("MAX_CALLS_PER_DAY", "100"))
 MAX_SMS_PER_DAY = int(os.environ.get("MAX_SMS_PER_DAY", "200"))
 ALERT_EMAIL = os.environ.get("ALERT_EMAIL", "")  # Email for cost alerts
 
+# Admin dashboard authentication
+ADMIN_API_TOKEN = os.environ.get("ADMIN_API_TOKEN", "")  # Bearer token for admin endpoints
+
 # Provider selection configuration
 CALLBACK_PROVIDER = os.environ.get("CALLBACK_PROVIDER", "twilio").lower()
 
@@ -2268,6 +2271,349 @@ def get_logs():
             'success': False,
             'error': str(e)
         }), 500
+
+
+# ============================================================
+# ADMIN DASHBOARD API ENDPOINTS
+# ============================================================
+
+def check_admin_auth():
+    """
+    Check if request has valid admin Bearer token.
+    Returns (is_valid: bool, error_response: tuple or None)
+    """
+    if not ADMIN_API_TOKEN:
+        logger.warning("Admin API token not configured - admin endpoints disabled")
+        return False, (jsonify({"success": False, "error": "Admin API not configured"}), 503)
+
+    auth_header = request.headers.get("Authorization", "")
+
+    if not auth_header.startswith("Bearer "):
+        return False, (jsonify({"success": False, "error": "Missing or invalid Authorization header"}), 401)
+
+    token = auth_header[7:]  # Remove "Bearer " prefix
+
+    if token != ADMIN_API_TOKEN:
+        logger.warning(f"Invalid admin token attempt from {request.remote_addr}")
+        return False, (jsonify({"success": False, "error": "Invalid admin token"}), 403)
+
+    return True, None
+
+
+@app.route("/admin/api/stats", methods=["GET"])
+@limiter.limit("60 per minute")
+def admin_get_stats():
+    """
+    Get callback system statistics.
+    Requires Bearer token authentication.
+
+    Returns:
+    - total_requests: Total callback requests
+    - by_status: Count of requests by status
+    - success_rate: Percentage of successful callbacks
+    - last_24h: Stats for last 24 hours
+    """
+    is_valid, error_response = check_admin_auth()
+    if not is_valid:
+        return error_response
+
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+
+        # Total requests
+        cursor.execute("SELECT COUNT(*) FROM callbacks")
+        total_requests = cursor.fetchone()[0]
+
+        # Requests by status
+        cursor.execute("""
+            SELECT request_status, COUNT(*) as count
+            FROM callbacks
+            GROUP BY request_status
+        """)
+        by_status = {row[0]: row[1] for row in cursor.fetchall()}
+
+        # Success rate (completed / total calls attempted)
+        completed = by_status.get('completed', 0)
+        total_calls = sum(by_status.get(s, 0) for s in ['calling', 'connected', 'completed', 'failed'])
+        success_rate = (completed / total_calls * 100) if total_calls > 0 else 0
+
+        # Last 24 hours stats
+        cutoff_time = datetime.utcnow() - timedelta(hours=24)
+        cursor.execute("""
+            SELECT COUNT(*) FROM callbacks
+            WHERE created_at > ?
+        """, (cutoff_time.isoformat(),))
+        last_24h_total = cursor.fetchone()[0]
+
+        cursor.execute("""
+            SELECT request_status, COUNT(*) as count
+            FROM callbacks
+            WHERE created_at > ?
+            GROUP BY request_status
+        """, (cutoff_time.isoformat(),))
+        last_24h_by_status = {row[0]: row[1] for row in cursor.fetchall()}
+
+        conn.close()
+
+        return jsonify({
+            "success": True,
+            "stats": {
+                "total_requests": total_requests,
+                "by_status": by_status,
+                "success_rate": round(success_rate, 2),
+                "last_24h": {
+                    "total": last_24h_total,
+                    "by_status": last_24h_by_status
+                }
+            }
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error getting admin stats: {str(e)}", exc_info=True)
+        return jsonify({"success": False, "error": "Internal server error"}), 500
+
+
+@app.route("/admin/api/requests", methods=["GET"])
+@limiter.limit("60 per minute")
+def admin_get_requests():
+    """
+    Get all callback requests with optional filtering.
+    Requires Bearer token authentication.
+
+    Query params:
+    - status: Filter by status (pending, verified, calling, connected, completed, failed, cancelled)
+    - phone: Filter by phone number (partial match)
+    - limit: Max results (default: 100, max: 1000)
+    - offset: Pagination offset (default: 0)
+    - order: Sort order (asc or desc, default: desc)
+    """
+    is_valid, error_response = check_admin_auth()
+    if not is_valid:
+        return error_response
+
+    try:
+        # Parse query parameters
+        status_filter = request.args.get('status', '').strip()
+        phone_filter = request.args.get('phone', '').strip()
+        limit = min(int(request.args.get('limit', 100)), 1000)
+        offset = int(request.args.get('offset', 0))
+        order = request.args.get('order', 'desc').lower()
+
+        if order not in ['asc', 'desc']:
+            order = 'desc'
+
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+
+        # Build query with filters
+        query = """
+            SELECT request_id, visitor_name, visitor_email, visitor_phone,
+                   request_status, status_message, created_at, updated_at,
+                   call_sid, sms_sid, ip_address, user_agent, fingerprint
+            FROM callbacks
+            WHERE 1=1
+        """
+        params = []
+
+        if status_filter:
+            query += " AND request_status = ?"
+            params.append(status_filter)
+
+        if phone_filter:
+            query += " AND visitor_phone LIKE ?"
+            params.append(f"%{phone_filter}%")
+
+        query += f" ORDER BY created_at {order.upper()} LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
+        cursor.execute(query, params)
+
+        requests_list = []
+        for row in cursor.fetchall():
+            requests_list.append({
+                "request_id": row[0],
+                "visitor_name": row[1],
+                "visitor_email": row[2],
+                "visitor_phone": row[3],
+                "request_status": row[4],
+                "status_message": row[5],
+                "created_at": row[6],
+                "updated_at": row[7],
+                "call_sid": row[8],
+                "sms_sid": row[9],
+                "ip_address": row[10],
+                "user_agent": row[11],
+                "fingerprint": row[12][:16] + "..." if row[12] else None  # Truncate fingerprint
+            })
+
+        # Get total count for pagination
+        count_query = "SELECT COUNT(*) FROM callbacks WHERE 1=1"
+        count_params = []
+
+        if status_filter:
+            count_query += " AND request_status = ?"
+            count_params.append(status_filter)
+
+        if phone_filter:
+            count_query += " AND visitor_phone LIKE ?"
+            count_params.append(f"%{phone_filter}%")
+
+        cursor.execute(count_query, count_params)
+        total_count = cursor.fetchone()[0]
+
+        conn.close()
+
+        return jsonify({
+            "success": True,
+            "requests": requests_list,
+            "pagination": {
+                "total": total_count,
+                "limit": limit,
+                "offset": offset,
+                "has_more": (offset + limit) < total_count
+            }
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error getting admin requests: {str(e)}", exc_info=True)
+        return jsonify({"success": False, "error": "Internal server error"}), 500
+
+
+@app.route("/admin/api/retry/<request_id>", methods=["POST"])
+@limiter.limit("10 per minute")
+def admin_retry_callback(request_id):
+    """
+    Retry a failed callback request.
+    Requires Bearer token authentication.
+
+    This will:
+    1. Check if request exists and is in 'failed' status
+    2. Reset status to 'verified'
+    3. Initiate a new callback
+    """
+    is_valid, error_response = check_admin_auth()
+    if not is_valid:
+        return error_response
+
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+
+        # Check if request exists
+        cursor.execute("""
+            SELECT visitor_name, visitor_email, visitor_phone, request_status
+            FROM callbacks
+            WHERE request_id = ?
+        """, (request_id,))
+
+        row = cursor.fetchone()
+
+        if not row:
+            conn.close()
+            return jsonify({"success": False, "error": "Request not found"}), 404
+
+        visitor_name, visitor_email, visitor_phone, current_status = row
+
+        # Only allow retry for failed requests
+        if current_status not in ['failed', 'cancelled']:
+            conn.close()
+            return jsonify({
+                "success": False,
+                "error": f"Cannot retry request with status '{current_status}'. Only 'failed' or 'cancelled' requests can be retried."
+            }), 400
+
+        # Reset status to verified
+        cursor.execute("""
+            UPDATE callbacks
+            SET request_status = ?, status_message = ?, updated_at = ?
+            WHERE request_id = ?
+        """, (
+            'verified',
+            'Retrying callback (admin action)',
+            datetime.utcnow().isoformat(),
+            request_id
+        ))
+
+        conn.commit()
+        conn.close()
+
+        logger.info(f"Admin retry initiated for request {request_id} from {request.remote_addr}")
+        log_audit_event(request_id, "admin_retry", {"admin_ip": request.remote_addr})
+
+        # Initiate callback using existing logic
+        # We'll call the initiate_callback function directly
+        try:
+            result = initiate_callback_internal(request_id, visitor_name, visitor_email, visitor_phone)
+
+            if result.get("success"):
+                return jsonify({
+                    "success": True,
+                    "message": "Callback retry initiated successfully",
+                    "request_id": request_id
+                }), 200
+            else:
+                return jsonify({
+                    "success": False,
+                    "error": result.get("error", "Failed to initiate callback")
+                }), 500
+
+        except Exception as e:
+            logger.error(f"Error initiating retry callback: {str(e)}", exc_info=True)
+            return jsonify({"success": False, "error": "Failed to initiate callback"}), 500
+
+    except Exception as e:
+        logger.error(f"Error retrying callback: {str(e)}", exc_info=True)
+        return jsonify({"success": False, "error": "Internal server error"}), 500
+
+
+def initiate_callback_internal(request_id, visitor_name, visitor_email, visitor_phone):
+    """
+    Internal function to initiate callback (used by admin retry).
+    Returns dict with success status and error message if applicable.
+    """
+    try:
+        # Check if callback provider is configured
+        if not callback_provider or not callback_provider.is_configured():
+            logger.error("Callback provider not configured")
+            update_callback_status(request_id, "failed", "Callback provider not configured")
+            return {"success": False, "error": "Callback provider not configured"}
+
+        # Check cost limits
+        within_limits, limit_message, stats = check_cost_limits()
+        if not within_limits:
+            logger.warning(f"Cost limits exceeded: {limit_message}")
+            update_callback_status(request_id, "failed", limit_message)
+            return {"success": False, "error": limit_message}
+
+        # Determine from_number based on provider
+        if isinstance(callback_provider, TwilioProvider):
+            from_number = TWILIO_NUMBER
+        elif isinstance(callback_provider, AsteriskProvider):
+            from_number = visitor_phone
+        else:
+            from_number = BUSINESS_NUMBER
+
+        # Initiate call
+        logger.info(f"Initiating callback for request {request_id} (admin retry)")
+        call_result = callback_provider.make_call(
+            to_number=BUSINESS_NUMBER,
+            from_number=from_number,
+            request_id=request_id
+        )
+
+        if call_result['success']:
+            update_callback_status(request_id, "calling", "Call initiated (admin retry)", call_sid=call_result['call_sid'])
+            log_audit_event(request_id, "call_initiated_admin", {"call_sid": call_result['call_sid']})
+            return {"success": True, "call_sid": call_result['call_sid']}
+        else:
+            update_callback_status(request_id, "failed", f"Call failed: {call_result['message']}")
+            return {"success": False, "error": call_result['message']}
+
+    except Exception as e:
+        logger.error(f"Error in initiate_callback_internal: {str(e)}", exc_info=True)
+        update_callback_status(request_id, "failed", f"Error: {str(e)}")
+        return {"success": False, "error": str(e)}
 
 
 if __name__ == "__main__":

@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Dashboard - Callback Platform</title>
+  <link rel="stylesheet" href="../styles.css">
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+  <div class="admin-container">
+    <header class="admin-header">
+      <h1>📊 Callback Platform Admin Dashboard</h1>
+      <div class="header-actions">
+        <button id="refreshBtn" class="btn btn-secondary">🔄 Refresh</button>
+        <span id="lastUpdated" class="last-updated">Never</span>
+      </div>
+    </header>
+
+    <!-- Authentication Section -->
+    <div id="authSection" class="auth-section">
+      <div class="auth-card">
+        <h2>🔐 Admin Authentication</h2>
+        <p>Enter your admin API token to access the dashboard</p>
+        <div class="form-group">
+          <label for="apiToken">API Token:</label>
+          <input type="password" id="apiToken" placeholder="Enter Bearer token" class="form-control">
+        </div>
+        <button id="loginBtn" class="btn btn-primary">Login</button>
+        <div id="authError" class="error-message" style="display: none;"></div>
+      </div>
+    </div>
+
+    <!-- Dashboard Content (hidden until authenticated) -->
+    <div id="dashboardContent" style="display: none;">
+      
+      <!-- Statistics Cards -->
+      <section class="stats-section">
+        <h2>📈 Statistics</h2>
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-label">Total Requests</div>
+            <div class="stat-value" id="totalRequests">-</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Success Rate</div>
+            <div class="stat-value" id="successRate">-</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Last 24h</div>
+            <div class="stat-value" id="last24h">-</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Pending</div>
+            <div class="stat-value" id="pendingCount">-</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Completed</div>
+            <div class="stat-value" id="completedCount">-</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Failed</div>
+            <div class="stat-value" id="failedCount">-</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Filters -->
+      <section class="filters-section">
+        <h2>🔍 Filters</h2>
+        <div class="filters-grid">
+          <div class="form-group">
+            <label for="statusFilter">Status:</label>
+            <select id="statusFilter" class="form-control">
+              <option value="">All Statuses</option>
+              <option value="pending">Pending</option>
+              <option value="verified">Verified</option>
+              <option value="calling">Calling</option>
+              <option value="connected">Connected</option>
+              <option value="completed">Completed</option>
+              <option value="failed">Failed</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="phoneFilter">Phone:</label>
+            <input type="text" id="phoneFilter" placeholder="Search by phone" class="form-control">
+          </div>
+          <div class="form-group">
+            <label for="limitFilter">Results per page:</label>
+            <select id="limitFilter" class="form-control">
+              <option value="25">25</option>
+              <option value="50" selected>50</option>
+              <option value="100">100</option>
+              <option value="250">250</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <button id="applyFiltersBtn" class="btn btn-primary">Apply Filters</button>
+            <button id="clearFiltersBtn" class="btn btn-secondary">Clear</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Requests Table -->
+      <section class="requests-section">
+        <h2>📋 Callback Requests</h2>
+        <div id="requestsLoading" class="loading">Loading...</div>
+        <div id="requestsError" class="error-message" style="display: none;"></div>
+        <div id="requestsTableContainer" style="display: none;">
+          <table class="requests-table">
+            <thead>
+              <tr>
+                <th>Request ID</th>
+                <th>Name</th>
+                <th>Phone</th>
+                <th>Status</th>
+                <th>Created</th>
+                <th>Updated</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="requestsTableBody">
+              <!-- Populated by JavaScript -->
+            </tbody>
+          </table>
+          <div class="pagination">
+            <button id="prevPageBtn" class="btn btn-secondary" disabled>← Previous</button>
+            <span id="paginationInfo">Page 1</span>
+            <button id="nextPageBtn" class="btn btn-secondary" disabled>Next →</button>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+
+  <script src="dashboard.js"></script>
+</body>
+</html>
+
