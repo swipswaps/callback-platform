@@ -86,16 +86,32 @@ All success claims require logs, tests, references, or official documentation co
 
 ## RULE 8 — PROCESS OUTPUT CAPTURE RELIABILITY
 
-All process executions must use persistent logging:
+All process executions must use persistent logging WITH echo markers:
 ```bash
-command 2>&1 | tee /tmp/descriptive_name.log
+echo "START: descriptive action" && command 2>&1 | tee /tmp/descriptive_name_$(date +%s).log && echo "END: descriptive action"
 ```
+
+**Rationale:** Echo markers prevent evasion by making output boundaries visible even when truncated.
 
 ---
 
-## RULE 9 — MANDATORY LOG REVIEW
+## RULE 9 — MANDATORY LOG REVIEW 🔴
 
-Logs must be reviewed before reasoning or fixes.
+**CRITICAL: Terminal output MUST be read BEFORE any reasoning about command results.**
+
+**FORBIDDEN EVASION PATTERNS:**
+- ❌ Command times out → launch "git status" to check results (EVASION!)
+- ❌ Command times out → launch "git log" to check results (EVASION!)
+- ❌ Command completes → reason about results without reading terminal (EVASION!)
+- ❌ Command completes → launch another command to "verify" without reading terminal first (EVASION!)
+
+**REQUIRED PATTERN:**
+1. Launch command with echo markers
+2. Wait for terminal ID
+3. Read terminal using `read-terminal` or `read-process`
+4. ONLY AFTER reading terminal, reason about results
+
+**Violation = immediate halt. No exceptions.**
 
 ---
 

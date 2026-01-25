@@ -9,10 +9,11 @@
 Before EVERY response, the agent MUST:
 
 1. ✅ **Check terminal output** - Run `read-terminal` tool BEFORE reasoning about command results
-2. ✅ **Use persistent logging** - ALL commands MUST use `2>&1 | tee /tmp/descriptive_name_$(date +%s).log`
+2. ✅ **Use persistent logging** - ALL commands MUST use `echo "START: description" && command 2>&1 | tee /tmp/descriptive_name_$(date +%s).log && echo "END: description"`
 3. ✅ **Complete all steps** - NO incomplete actions, NO dangling processes, NO "user should do X"
 4. ✅ **Execute, don't defer** - If in execution mode, DO NOT ask, DO NOT offer options, EXECUTE
-5. ✅ **Echo before/after** - Announce what you're about to do BEFORE doing it
+5. ✅ **Echo before/after** - REQUIRED: `echo "START: X"` before command, `echo "END: X"` after command
+6. ✅ **Read terminal FIRST** - FORBIDDEN to reason about command results without reading terminal output first
 
 ---
 
@@ -21,29 +22,44 @@ Before EVERY response, the agent MUST:
 ### 🔴 RULE 9 VIOLATION DETECTOR
 
 **CRITICAL: NEVER call read-process in same tool block as launch-process**
+**CRITICAL: NEVER reason about command results without reading terminal FIRST**
+
+**MANDATORY ECHO PATTERN:**
+```bash
+echo "START: descriptive action" && command 2>&1 | tee /tmp/descriptive_name_$(date +%s).log && echo "END: descriptive action"
+```
 
 **CORRECT PATTERN:**
 ```
 STEP 1: Launch command with echo markers
-  launch-process: echo "START" && command 2>&1 | tee /tmp/log.log && echo "END"
+  launch-process: echo "START: git push" && git push origin main 2>&1 | tee /tmp/git_push_$(date +%s).log && echo "END: git push"
 
 STEP 2: Wait for response, get terminal ID
 
 STEP 3: Read terminal in NEXT tool block
-  read-process: terminal_id=[actual ID from step 2]
+  read-terminal OR read-process: terminal_id=[actual ID from step 2]
+
+STEP 4: ONLY AFTER reading terminal, reason about results
 
 NEVER guess terminal IDs
 NEVER call both in same <function_calls> block
+NEVER reason without reading terminal first
 ```
 
 **BEFORE reasoning about ANY command output:**
 ```
-IF command was launched with launch-process THEN
-    MUST call read-process with returned terminal ID
-    MUST NOT call read-process in same tool block
+IF command was launched THEN
+    MUST call read-terminal or read-process FIRST
+    MUST NOT call read-process in same tool block as launch-process
     MUST NOT guess terminal IDs
     MUST NOT reason about output without reading terminal
     MUST NOT assume command succeeded without evidence
+    MUST NOT launch another command to "check" results without reading terminal first
+
+    FORBIDDEN EVASION PATTERNS:
+    ❌ Command times out → launch "git status" to check → reason about git status
+    ❌ Command times out → launch "git log" to check → reason about git log
+    ✅ Command times out → read-terminal → see actual output → reason based on evidence
 END IF
 ```
 
@@ -51,21 +67,27 @@ END IF
 ```
 ❌ BAD: launch-process + read-process in same tool block
 ❌ BAD: "Let me check git status" → launches command → reasons without reading terminal
-✅ GOOD: launch-process → wait for terminal ID → read-process in next block → reason based on output
+❌ BAD: git push times out → launch "git status" → reason about status (EVASION!)
+❌ BAD: git push times out → launch "git log" → reason about log (EVASION!)
+✅ GOOD: launch-process → wait for terminal ID → read-terminal in next block → reason based on output
+✅ GOOD: git push times out → read-terminal → see "Total 4 (delta 2)" → confirm success
 ```
 
 ### 🔴 RULE 8 VIOLATION DETECTOR
 
-**ALL process executions MUST include:**
+**ALL process executions MUST include echo markers AND logging:**
 ```bash
-command 2>&1 | tee /tmp/descriptive_name_$(date +%s).log
+echo "START: descriptive action" && command 2>&1 | tee /tmp/descriptive_name_$(date +%s).log && echo "END: descriptive action"
 ```
 
 **Violation Example:**
 ```
 ❌ BAD: git push origin main
-✅ GOOD: git push origin main 2>&1 | tee /tmp/git_push_$(date +%s).log
+❌ BAD: git push origin main 2>&1 | tee /tmp/git_push_$(date +%s).log  (missing echo markers)
+✅ GOOD: echo "START: git push" && git push origin main 2>&1 | tee /tmp/git_push_$(date +%s).log && echo "END: git push"
 ```
+
+**Rationale:** Echo markers make it impossible for the LLM to claim "I didn't see the output" because START/END markers are always visible even if command output is truncated.
 
 ### 🔴 RULE 15 VIOLATION DETECTOR
 
