@@ -895,6 +895,27 @@ def migrate_database():
             cursor.execute("ALTER TABLE callbacks ADD COLUMN fingerprint TEXT")
             needs_migration = True
 
+        # Add retry columns if missing
+        if 'retry_count' not in columns:
+            logger.info("Adding retry_count column to callbacks table")
+            cursor.execute("ALTER TABLE callbacks ADD COLUMN retry_count INTEGER DEFAULT 0")
+            needs_migration = True
+
+        if 'max_retries' not in columns:
+            logger.info("Adding max_retries column to callbacks table")
+            cursor.execute("ALTER TABLE callbacks ADD COLUMN max_retries INTEGER DEFAULT 3")
+            needs_migration = True
+
+        if 'retry_at' not in columns:
+            logger.info("Adding retry_at column to callbacks table")
+            cursor.execute("ALTER TABLE callbacks ADD COLUMN retry_at TEXT")
+            needs_migration = True
+
+        if 'last_retry_at' not in columns:
+            logger.info("Adding last_retry_at column to callbacks table")
+            cursor.execute("ALTER TABLE callbacks ADD COLUMN last_retry_at TEXT")
+            needs_migration = True
+
         if needs_migration:
             # Create indexes for new columns
             try:
@@ -905,6 +926,16 @@ def migrate_database():
                 logger.info("Created fingerprint index")
             except Exception as e:
                 logger.warning(f"Could not create fingerprint index: {e}")
+
+            # Create index on retry_at for efficient retry job queries
+            try:
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_callbacks_retry_at
+                    ON callbacks(retry_at)
+                """)
+                logger.info("Created retry_at index")
+            except Exception as e:
+                logger.warning(f"Could not create retry_at index: {e}")
 
             conn.commit()
             logger.info("Database migration completed successfully")
@@ -941,7 +972,11 @@ def init_database():
             sms_sid TEXT,
             ip_address TEXT,
             user_agent TEXT,
-            fingerprint TEXT
+            fingerprint TEXT,
+            retry_count INTEGER DEFAULT 0,
+            max_retries INTEGER DEFAULT 3,
+            retry_at TEXT,
+            last_retry_at TEXT
         )
     """)
 
@@ -1218,7 +1253,7 @@ def update_callback_status(request_id, status, message=None, call_sid=None, sms_
     try:
         conn = sqlite3.connect(DATABASE_PATH)
         cursor = conn.cursor()
-        
+
         cursor.execute("""
             UPDATE callbacks
             SET request_status = ?, status_message = ?, updated_at = ?, call_sid = ?, sms_sid = ?
@@ -1231,14 +1266,160 @@ def update_callback_status(request_id, status, message=None, call_sid=None, sms_
             sms_sid,
             request_id
         ))
-        
+
         conn.commit()
         conn.close()
-        
+
         logger.info(f"Callback status updated: {request_id} -> {status}")
         log_audit_event(request_id, "status_update", {"status": status, "message": message})
     except Exception as e:
         logger.error(f"Failed to update callback status: {str(e)}")
+
+
+def calculate_retry_delay(retry_count):
+    """
+    Calculate exponential backoff delay for retries.
+
+    Returns delay in seconds:
+    - Retry 1: 60 seconds (1 minute)
+    - Retry 2: 300 seconds (5 minutes)
+    - Retry 3: 900 seconds (15 minutes)
+
+    Formula: min(60 * (5 ** retry_count), 900)
+    """
+    # Exponential backoff: 1min, 5min, 15min
+    delay = min(60 * (5 ** retry_count), 900)
+    return delay
+
+
+def schedule_retry(request_id, retry_count):
+    """
+    Schedule a retry for a failed callback request.
+
+    Updates the database with:
+    - retry_count incremented
+    - retry_at set to current time + exponential backoff delay
+    - last_retry_at set to current time
+    - request_status set to 'retry_scheduled'
+    """
+    try:
+        delay_seconds = calculate_retry_delay(retry_count)
+        retry_at = datetime.utcnow() + timedelta(seconds=delay_seconds)
+
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            UPDATE callbacks
+            SET retry_count = ?,
+                retry_at = ?,
+                last_retry_at = ?,
+                request_status = 'retry_scheduled',
+                status_message = ?,
+                updated_at = ?
+            WHERE request_id = ?
+        """, (
+            retry_count,
+            retry_at.isoformat(),
+            datetime.utcnow().isoformat(),
+            f"Retry {retry_count} scheduled in {delay_seconds}s",
+            datetime.utcnow().isoformat(),
+            request_id
+        ))
+
+        conn.commit()
+        conn.close()
+
+        logger.info(f"Retry scheduled for {request_id}: attempt {retry_count} at {retry_at.isoformat()} (delay: {delay_seconds}s)")
+        log_audit_event(request_id, "retry_scheduled", {
+            "retry_count": retry_count,
+            "retry_at": retry_at.isoformat(),
+            "delay_seconds": delay_seconds
+        })
+
+        return True
+    except Exception as e:
+        logger.error(f"Failed to schedule retry for {request_id}: {str(e)}")
+        return False
+
+
+def mark_as_dead_letter(request_id, reason):
+    """
+    Mark a callback request as permanently failed (dead letter).
+
+    This happens when max retries are exhausted.
+    """
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            UPDATE callbacks
+            SET request_status = 'dead_letter',
+                status_message = ?,
+                updated_at = ?
+            WHERE request_id = ?
+        """, (
+            reason,
+            datetime.utcnow().isoformat(),
+            request_id
+        ))
+
+        conn.commit()
+        conn.close()
+
+        logger.warning(f"Request {request_id} moved to dead letter queue: {reason}")
+        log_audit_event(request_id, "dead_letter", {"reason": reason})
+
+        return True
+    except Exception as e:
+        logger.error(f"Failed to mark {request_id} as dead letter: {str(e)}")
+        return False
+
+
+def process_retry_queue():
+    """
+    Process the retry queue - find requests that are due for retry and initiate callbacks.
+
+    This function should be called periodically (e.g., every minute) by a background job.
+    """
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+
+        # Find requests that are due for retry
+        now = datetime.utcnow().isoformat()
+        cursor.execute("""
+            SELECT request_id, visitor_name, visitor_email, visitor_phone, retry_count, max_retries
+            FROM callbacks
+            WHERE request_status = 'retry_scheduled'
+            AND retry_at <= ?
+            ORDER BY retry_at ASC
+            LIMIT 10
+        """, (now,))
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        if not rows:
+            logger.debug("No retries due at this time")
+            return
+
+        logger.info(f"Processing {len(rows)} retry requests")
+
+        for row in rows:
+            request_id, visitor_name, visitor_email, visitor_phone, retry_count, max_retries = row
+
+            logger.info(f"Processing retry for {request_id}: attempt {retry_count}/{max_retries}")
+
+            # Attempt the callback
+            result = initiate_callback_internal(request_id, visitor_name, visitor_email, visitor_phone)
+
+            # Note: initiate_callback_internal will update the status to 'calling' or 'failed'
+            # The twilio_status_callback will handle the final outcome
+
+    except Exception as e:
+        logger.error(f"Error processing retry queue: {str(e)}", exc_info=True)
 
 
 # Initialize database on startup (creates tables if they don't exist)
@@ -1283,14 +1464,14 @@ def metrics():
         cursor = conn.cursor()
 
         # Reset all active gauges to 0 first
-        for status in ['pending', 'verified', 'calling', 'connected']:
+        for status in ['pending', 'verified', 'calling', 'connected', 'retry_scheduled']:
             callback_requests_active.labels(status=status).set(0)
 
         # Active requests by status
         cursor.execute("""
             SELECT request_status, COUNT(*)
             FROM callbacks
-            WHERE request_status IN ('pending', 'verified', 'calling', 'connected')
+            WHERE request_status IN ('pending', 'verified', 'calling', 'connected', 'retry_scheduled')
             GROUP BY request_status
         """)
         for status, count in cursor.fetchall():
@@ -2137,49 +2318,66 @@ def twilio_status_callback():
             callback_requests_total.labels(status='completed').inc()
             twilio_calls_total.labels(status='completed').inc()
         elif call_status in ["no-answer", "busy", "failed"] or (call_status == "completed" and duration_seconds < 20):
-            update_callback_status(request_id, "failed", f"Call {call_status}")
-            # Increment Prometheus metrics
-            callback_requests_total.labels(status='failed').inc()
-            twilio_calls_total.labels(status='failed').inc()
+            # Check retry count and decide whether to retry or mark as failed
+            conn = sqlite3.connect(DATABASE_PATH)
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT retry_count, max_retries, visitor_name, visitor_phone
+                FROM callbacks
+                WHERE request_id = ?
+            """, (request_id,))
+            row = cursor.fetchone()
+            conn.close()
 
-            # Send SMS to BOTH business AND visitor as fallback
-            if twilio_client:
-                try:
-                    # Fetch visitor info
-                    conn = sqlite3.connect(DATABASE_PATH)
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        SELECT visitor_name, visitor_phone
-                        FROM callbacks
-                        WHERE request_id = ?
-                    """, (request_id,))
-                    row = cursor.fetchone()
-                    conn.close()
+            if row:
+                retry_count, max_retries, visitor_name, visitor_phone = row
 
-                    if row:
-                        visitor_name, visitor_phone = row
+                # Increment retry count
+                new_retry_count = retry_count + 1
 
-                        # SMS to business (existing behavior)
-                        business_sms = twilio_client.messages.create(
-                            to=BUSINESS_NUMBER,
-                            from_=TWILIO_NUMBER,
-                            body=f"Missed callback from {visitor_name or 'visitor'} at {visitor_phone}. Please call back."
-                        )
-                        twilio_sms_total.labels(type='missed_call_business').inc()
-                        logger.info(f"SMS sent to business for missed call: {business_sms.sid}")
+                if new_retry_count <= max_retries:
+                    # Schedule retry with exponential backoff
+                    logger.info(f"Call failed for {request_id}, scheduling retry {new_retry_count}/{max_retries}")
+                    schedule_retry(request_id, new_retry_count)
+                    # Increment Prometheus metrics for retry scheduled
+                    callback_requests_total.labels(status='retry_scheduled').inc()
+                    twilio_calls_total.labels(status='failed').inc()
+                else:
+                    # Max retries exhausted - mark as dead letter
+                    logger.warning(f"Max retries exhausted for {request_id}, moving to dead letter queue")
+                    mark_as_dead_letter(request_id, f"Max retries ({max_retries}) exhausted after {call_status}")
+                    # Increment Prometheus metrics
+                    callback_requests_total.labels(status='dead_letter').inc()
+                    twilio_calls_total.labels(status='failed').inc()
 
-                        # SMS to visitor (NEW: inform them what happened)
-                        # Keep message short to avoid carrier filtering (trial account adds ~40 char prefix)
-                        visitor_sms = twilio_client.messages.create(
-                            to=visitor_phone,
-                            from_=TWILIO_NUMBER,
-                            body=f"We missed you! Reply: VOICEMAIL to leave message, HELP for assistance, or CANCEL to stop."
-                        )
-                        twilio_sms_total.labels(type='missed_call_visitor').inc()
-                        update_callback_status(request_id, "sms_sent", "SMS sent to business and visitor", sms_sid=visitor_sms.sid)
-                        logger.info(f"SMS sent to visitor for missed call: {visitor_sms.sid}")
-                except Exception as e:
-                    logger.error(f"Failed to send SMS fallback: {str(e)}")
+                    # Send SMS to BOTH business AND visitor as final fallback
+                    if twilio_client:
+                        try:
+                            # SMS to business (existing behavior)
+                            business_sms = twilio_client.messages.create(
+                                to=BUSINESS_NUMBER,
+                                from_=TWILIO_NUMBER,
+                                body=f"Missed callback from {visitor_name or 'visitor'} at {visitor_phone}. Please call back."
+                            )
+                            twilio_sms_total.labels(type='missed_call_business').inc()
+                            logger.info(f"SMS sent to business for missed call: {business_sms.sid}")
+
+                            # SMS to visitor (NEW: inform them what happened)
+                            # Keep message short to avoid carrier filtering (trial account adds ~40 char prefix)
+                            visitor_sms = twilio_client.messages.create(
+                                to=visitor_phone,
+                                from_=TWILIO_NUMBER,
+                                body=f"We missed you! Reply: VOICEMAIL to leave message, HELP for assistance, or CANCEL to stop."
+                            )
+                            twilio_sms_total.labels(type='missed_call_visitor').inc()
+                            logger.info(f"SMS sent to visitor for missed call: {visitor_sms.sid}")
+                        except Exception as e:
+                            logger.error(f"Failed to send SMS fallback: {str(e)}")
+            else:
+                # Fallback if we can't find the request (shouldn't happen)
+                update_callback_status(request_id, "failed", f"Call {call_status}")
+                callback_requests_total.labels(status='failed').inc()
+                twilio_calls_total.labels(status='failed').inc()
 
         return "", 200
 
@@ -2731,6 +2929,34 @@ def initiate_callback_internal(request_id, visitor_name, visitor_email, visitor_
         logger.error(f"Error in initiate_callback_internal: {str(e)}", exc_info=True)
         update_callback_status(request_id, "failed", f"Error: {str(e)}")
         return {"success": False, "error": str(e)}
+
+
+# Background retry processor
+def retry_processor_worker():
+    """
+    Background worker that processes the retry queue every 60 seconds.
+
+    This runs in a separate thread and continuously checks for requests
+    that are due for retry.
+    """
+    import time
+    logger.info("Retry processor worker started")
+
+    while True:
+        try:
+            process_retry_queue()
+        except Exception as e:
+            logger.error(f"Error in retry processor worker: {str(e)}", exc_info=True)
+
+        # Sleep for 60 seconds before next check
+        time.sleep(60)
+
+
+# Start background retry processor thread
+import threading
+retry_thread = threading.Thread(target=retry_processor_worker, daemon=True)
+retry_thread.start()
+logger.info("Background retry processor thread started")
 
 
 if __name__ == "__main__":
