@@ -33,6 +33,7 @@ from oauth_providers import get_user_info
 import phonenumbers
 import pytz
 from datetime import time as dt_time
+from prometheus_client import Counter, Gauge, Histogram, generate_latest, CONTENT_TYPE_LATEST
 
 # Configure comprehensive logging per Rule 25
 LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s | %(funcName)s | %(message)s"
@@ -69,6 +70,56 @@ limiter = Limiter(
     key_func=get_remote_address,
     default_limits=["200 per day", "50 per hour"],
     storage_uri="memory://"
+)
+
+# Prometheus metrics collectors
+# Track callback requests by status
+callback_requests_total = Counter(
+    'callback_requests_total',
+    'Total callback requests',
+    ['status']
+)
+
+# Track currently active requests by status
+callback_requests_active = Gauge(
+    'callback_requests_active',
+    'Currently active callback requests',
+    ['status']
+)
+
+# Track callback duration
+callback_duration_seconds = Histogram(
+    'callback_duration_seconds',
+    'Callback request duration in seconds',
+    ['status']
+)
+
+# Track Twilio calls
+twilio_calls_total = Counter(
+    'twilio_calls_total',
+    'Total Twilio calls initiated',
+    ['status']
+)
+
+# Track Twilio SMS
+twilio_sms_total = Counter(
+    'twilio_sms_total',
+    'Total Twilio SMS sent',
+    ['type']
+)
+
+# Track verification codes
+verification_codes_sent = Counter(
+    'verification_codes_sent_total',
+    'Total verification codes sent',
+    ['channel']
+)
+
+# Track verification attempts
+verification_attempts_total = Counter(
+    'verification_attempts_total',
+    'Total verification attempts',
+    ['result']
 )
 
 # Configuration from environment variables
@@ -1012,6 +1063,10 @@ def send_sms_verification(request_id, phone, visitor_name):
             body=message
         )
 
+        # Increment Prometheus metrics
+        verification_codes_sent.labels(channel='sms').inc()
+        twilio_sms_total.labels(type='verification').inc()
+
         logger.info(f"SMS verification code sent to {phone} for request {request_id}: {sms.sid}")
         return True, code, None
 
@@ -1076,6 +1131,8 @@ def verify_code(request_id, channel, code):
         if code != stored_code:
             conn.commit()
             conn.close()
+            # Increment failed verification metric
+            verification_attempts_total.labels(result='failed').inc()
             return False, "Invalid verification code"
 
         # Mark as verified
@@ -1087,6 +1144,9 @@ def verify_code(request_id, channel, code):
 
         conn.commit()
         conn.close()
+
+        # Increment successful verification metric
+        verification_attempts_total.labels(result='success').inc()
 
         logger.info(f"Verification code verified for {request_id} via {channel}")
         return True, None
@@ -1201,6 +1261,46 @@ def health_check():
         "provider_configured": callback_provider.is_configured() if callback_provider else False,
         "twilio_configured": twilio_client is not None  # Legacy compatibility
     })
+
+
+@app.route("/metrics", methods=["GET"])
+def metrics():
+    """
+    Prometheus metrics endpoint.
+    Exposes metrics in Prometheus text format for monitoring and alerting.
+
+    Metrics exposed:
+    - callback_requests_total: Total callback requests by status
+    - callback_requests_active: Currently active requests by status
+    - twilio_calls_total: Total Twilio calls by status
+    - twilio_sms_total: Total SMS sent by type
+    - verification_codes_sent_total: Total verification codes sent by channel
+    - verification_attempts_total: Total verification attempts by result
+    """
+    try:
+        # Update gauge metrics from database
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+
+        # Reset all active gauges to 0 first
+        for status in ['pending', 'verified', 'calling', 'connected']:
+            callback_requests_active.labels(status=status).set(0)
+
+        # Active requests by status
+        cursor.execute("""
+            SELECT request_status, COUNT(*)
+            FROM callbacks
+            WHERE request_status IN ('pending', 'verified', 'calling', 'connected')
+            GROUP BY request_status
+        """)
+        for status, count in cursor.fetchall():
+            callback_requests_active.labels(status=status).set(count)
+
+        conn.close()
+    except Exception as e:
+        logger.error(f"Error updating metrics: {e}")
+
+    return generate_latest(), 200, {'Content-Type': CONTENT_TYPE_LATEST}
 
 
 @app.route("/api/configure", methods=["POST"])
@@ -1710,6 +1810,9 @@ def request_callback():
         conn.commit()
         conn.close()
 
+        # Increment Prometheus metric for pending requests
+        callback_requests_total.labels(status='pending').inc()
+
         log_audit_event(request_id, "callback_requested", {
             "visitor_phone": visitor_phone,
             "has_name": bool(visitor_name),
@@ -1838,6 +1941,9 @@ def initiate_callback():
 
                 if call_result['success']:
                     update_callback_status(request_id, "calling", "Calling business", call_sid=call_result['call_sid'])
+                    # Increment Prometheus metrics
+                    callback_requests_total.labels(status='calling').inc()
+                    twilio_calls_total.labels(status='initiated').inc()
                     logger.info(f"Call initiated via {callback_provider.__class__.__name__}: {call_result['call_sid']}")
                 else:
                     raise Exception(call_result['message'])
@@ -1845,6 +1951,9 @@ def initiate_callback():
             except Exception as e:
                 logger.error(f"Callback failed: {str(e)}")
                 update_callback_status(request_id, "failed", f"Call failed: {str(e)}")
+                # Increment Prometheus metrics
+                callback_requests_total.labels(status='failed').inc()
+                twilio_calls_total.labels(status='failed').inc()
 
                 # Send SMS fallback to business (Twilio only)
                 if isinstance(callback_provider, TwilioProvider):
@@ -2024,8 +2133,14 @@ def twilio_status_callback():
         if call_status == "completed" and duration_seconds >= 20:
             # Real conversation happened (answered and talked for 20+ seconds)
             update_callback_status(request_id, "completed", "Call completed successfully")
+            # Increment Prometheus metrics
+            callback_requests_total.labels(status='completed').inc()
+            twilio_calls_total.labels(status='completed').inc()
         elif call_status in ["no-answer", "busy", "failed"] or (call_status == "completed" and duration_seconds < 20):
             update_callback_status(request_id, "failed", f"Call {call_status}")
+            # Increment Prometheus metrics
+            callback_requests_total.labels(status='failed').inc()
+            twilio_calls_total.labels(status='failed').inc()
 
             # Send SMS to BOTH business AND visitor as fallback
             if twilio_client:
@@ -2050,6 +2165,7 @@ def twilio_status_callback():
                             from_=TWILIO_NUMBER,
                             body=f"Missed callback from {visitor_name or 'visitor'} at {visitor_phone}. Please call back."
                         )
+                        twilio_sms_total.labels(type='missed_call_business').inc()
                         logger.info(f"SMS sent to business for missed call: {business_sms.sid}")
 
                         # SMS to visitor (NEW: inform them what happened)
@@ -2059,6 +2175,7 @@ def twilio_status_callback():
                             from_=TWILIO_NUMBER,
                             body=f"We missed you! Reply: VOICEMAIL to leave message, HELP for assistance, or CANCEL to stop."
                         )
+                        twilio_sms_total.labels(type='missed_call_visitor').inc()
                         update_callback_status(request_id, "sms_sent", "SMS sent to business and visitor", sms_sid=visitor_sms.sid)
                         logger.info(f"SMS sent to visitor for missed call: {visitor_sms.sid}")
                 except Exception as e:
