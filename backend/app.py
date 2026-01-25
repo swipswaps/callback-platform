@@ -1447,8 +1447,11 @@ def health_check():
 @app.route("/metrics", methods=["GET"])
 def metrics():
     """
-    Prometheus metrics endpoint.
+    Prometheus metrics endpoint (requires authentication).
     Exposes metrics in Prometheus text format for monitoring and alerting.
+
+    Authentication: Bearer token required (same as admin endpoints)
+    Header: Authorization: Bearer <ADMIN_API_TOKEN>
 
     Metrics exposed:
     - callback_requests_total: Total callback requests by status
@@ -1458,6 +1461,11 @@ def metrics():
     - verification_codes_sent_total: Total verification codes sent by channel
     - verification_attempts_total: Total verification attempts by result
     """
+    # Check authentication
+    is_valid, error_response = check_admin_auth()
+    if not is_valid:
+        return error_response
+
     try:
         # Update gauge metrics from database
         conn = sqlite3.connect(DATABASE_PATH)
