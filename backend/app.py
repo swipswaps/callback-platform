@@ -160,6 +160,23 @@ escalation_failures_total = Counter(
     ['level']
 )
 
+# Track concurrency
+concurrent_calls_gauge = Gauge(
+    'concurrent_calls',
+    'Current number of concurrent calls in progress'
+)
+
+concurrent_sms_gauge = Gauge(
+    'concurrent_sms',
+    'Current number of concurrent SMS sends in progress'
+)
+
+concurrency_limit_hits_total = Counter(
+    'concurrency_limit_hits_total',
+    'Total times concurrency limit was hit',
+    ['type', 'action']  # type: calls/sms, action: queue/reject/delay
+)
+
 # Configuration from environment variables
 TWILIO_SID = os.environ.get("TWILIO_SID", "")
 TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
@@ -188,6 +205,11 @@ ESCALATION_ENABLED = os.environ.get("ESCALATION_ENABLED", "false").lower() == "t
 ESCALATION_TIMEOUT_MINUTES = int(os.environ.get("ESCALATION_TIMEOUT_MINUTES", "5"))  # Escalate after 5 minutes of no answer
 ESCALATION_CHAIN = os.environ.get("ESCALATION_CHAIN", "")  # Comma-separated backup numbers: +1234567890,+0987654321
 ESCALATION_MAX_LEVEL = int(os.environ.get("ESCALATION_MAX_LEVEL", "2"))  # Max escalation levels (0=primary, 1=first backup, 2=second backup)
+
+# Concurrency control configuration
+MAX_CONCURRENT_CALLS = int(os.environ.get("MAX_CONCURRENT_CALLS", "3"))  # Max simultaneous calls to business
+MAX_CONCURRENT_SMS = int(os.environ.get("MAX_CONCURRENT_SMS", "10"))  # Max simultaneous SMS sends
+CONCURRENCY_OVERFLOW_ACTION = os.environ.get("CONCURRENCY_OVERFLOW_ACTION", "queue")  # queue, reject, or delay
 
 # Cost protection limits
 MAX_CALLS_PER_DAY = int(os.environ.get("MAX_CALLS_PER_DAY", "100"))
@@ -740,6 +762,119 @@ def check_fingerprint_abuse(fingerprint, max_requests_per_day=20):
         return False, "", 0
 
 
+def get_concurrent_calls_count():
+    """
+    Get current number of concurrent calls in progress.
+
+    Returns:
+        int: Number of requests currently in 'calling' or 'connected' status
+    """
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT COUNT(*)
+            FROM callbacks
+            WHERE request_status IN ('calling', 'connected')
+        """)
+
+        count = cursor.fetchone()[0]
+        conn.close()
+
+        # Update Prometheus gauge
+        concurrent_calls_gauge.set(count)
+
+        return count
+
+    except Exception as e:
+        logger.error(f"Error getting concurrent calls count: {str(e)}")
+        return 0
+
+
+def get_concurrent_sms_count():
+    """
+    Get current number of concurrent SMS sends in progress.
+
+    Returns:
+        int: Number of requests currently sending SMS (verified status within last 5 minutes)
+    """
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+
+        # Count recent SMS sends (within last 5 minutes)
+        cutoff_time = datetime.utcnow() - timedelta(minutes=5)
+
+        cursor.execute("""
+            SELECT COUNT(*)
+            FROM callbacks
+            WHERE request_status = 'verified'
+            AND updated_at > ?
+        """, (cutoff_time.isoformat(),))
+
+        count = cursor.fetchone()[0]
+        conn.close()
+
+        # Update Prometheus gauge
+        concurrent_sms_gauge.set(count)
+
+        return count
+
+    except Exception as e:
+        logger.error(f"Error getting concurrent SMS count: {str(e)}")
+        return 0
+
+
+def check_concurrency_limit(operation_type):
+    """
+    Check if concurrency limit is reached for given operation type.
+
+    Args:
+        operation_type (str): 'call' or 'sms'
+
+    Returns:
+        tuple: (can_proceed: bool, message: str, current_count: int, max_limit: int)
+    """
+    try:
+        if operation_type == 'call':
+            current_count = get_concurrent_calls_count()
+            max_limit = MAX_CONCURRENT_CALLS
+
+            if current_count >= max_limit:
+                logger.warning(f"Concurrent call limit reached: {current_count}/{max_limit}")
+                concurrency_limit_hits_total.labels(type='calls', action=CONCURRENCY_OVERFLOW_ACTION).inc()
+
+                if CONCURRENCY_OVERFLOW_ACTION == 'reject':
+                    return False, f"System is at capacity ({current_count} concurrent calls). Please try again later.", current_count, max_limit
+                elif CONCURRENCY_OVERFLOW_ACTION == 'queue':
+                    return True, f"Request queued due to high call volume ({current_count}/{max_limit} concurrent calls).", current_count, max_limit
+                elif CONCURRENCY_OVERFLOW_ACTION == 'delay':
+                    return True, f"Request will be delayed due to high call volume ({current_count}/{max_limit} concurrent calls).", current_count, max_limit
+
+        elif operation_type == 'sms':
+            current_count = get_concurrent_sms_count()
+            max_limit = MAX_CONCURRENT_SMS
+
+            if current_count >= max_limit:
+                logger.warning(f"Concurrent SMS limit reached: {current_count}/{max_limit}")
+                concurrency_limit_hits_total.labels(type='sms', action=CONCURRENCY_OVERFLOW_ACTION).inc()
+
+                if CONCURRENCY_OVERFLOW_ACTION == 'reject':
+                    return False, f"System is at capacity ({current_count} concurrent SMS). Please try again later.", current_count, max_limit
+                elif CONCURRENCY_OVERFLOW_ACTION == 'queue':
+                    return True, f"Request queued due to high SMS volume ({current_count}/{max_limit} concurrent SMS).", current_count, max_limit
+                elif CONCURRENCY_OVERFLOW_ACTION == 'delay':
+                    return True, f"Request will be delayed due to high SMS volume ({current_count}/{max_limit} concurrent SMS).", current_count, max_limit
+
+        return True, "", current_count if operation_type in ['call', 'sms'] else 0, max_limit if operation_type in ['call', 'sms'] else 0
+
+    except Exception as e:
+        logger.error(f"Error checking concurrency limit: {str(e)}")
+        # Fail open - allow request if check fails
+        return True, "", 0, 0
+
+
 def check_honeypot(honeypot_value):
     """
     Check honeypot field to detect bots.
@@ -1126,6 +1261,15 @@ def send_sms_verification(request_id, phone, visitor_name):
         tuple: (success: bool, code: str or None, error: str or None)
     """
     try:
+        # Check concurrency limits for SMS
+        can_proceed, concurrency_message, current_count, max_limit = check_concurrency_limit('sms')
+        if not can_proceed:
+            logger.warning(f"Concurrency limit reached for SMS: {current_count}/{max_limit}")
+            return False, None, concurrency_message
+        elif concurrency_message:
+            # Queue or delay action - log the message but proceed
+            logger.info(f"SMS concurrency handling: {concurrency_message}")
+
         # Check if code already exists and is still valid
         conn = sqlite3.connect(DATABASE_PATH)
         cursor = conn.cursor()
@@ -1800,6 +1944,42 @@ def worker_health_endpoint():
             "healthy": twilio_healthy,
             "timestamp": datetime.utcnow().isoformat()
         }
+    })
+
+
+@app.route("/health/concurrency", methods=["GET"])
+def concurrency_health_endpoint():
+    """
+    Expose concurrency status.
+    Requires admin authentication.
+
+    Returns:
+        JSON with current concurrency levels and limits
+    """
+    # Check admin authentication
+    auth_result = check_admin_auth()
+    if auth_result:
+        return auth_result
+
+    # Get current concurrency counts
+    concurrent_calls = get_concurrent_calls_count()
+    concurrent_sms = get_concurrent_sms_count()
+
+    return jsonify({
+        "calls": {
+            "current": concurrent_calls,
+            "limit": MAX_CONCURRENT_CALLS,
+            "available": max(0, MAX_CONCURRENT_CALLS - concurrent_calls),
+            "utilization_percent": round((concurrent_calls / MAX_CONCURRENT_CALLS * 100) if MAX_CONCURRENT_CALLS > 0 else 0, 2)
+        },
+        "sms": {
+            "current": concurrent_sms,
+            "limit": MAX_CONCURRENT_SMS,
+            "available": max(0, MAX_CONCURRENT_SMS - concurrent_sms),
+            "utilization_percent": round((concurrent_sms / MAX_CONCURRENT_SMS * 100) if MAX_CONCURRENT_SMS > 0 else 0, 2)
+        },
+        "overflow_action": CONCURRENCY_OVERFLOW_ACTION,
+        "timestamp": datetime.utcnow().isoformat()
     })
 
 
@@ -3271,6 +3451,16 @@ def initiate_callback_internal(request_id, visitor_name, visitor_email, visitor_
             logger.error("Callback provider not configured")
             update_callback_status(request_id, "failed", "Callback provider not configured")
             return {"success": False, "error": "Callback provider not configured"}
+
+        # Check concurrency limits for calls
+        can_proceed, concurrency_message, current_count, max_limit = check_concurrency_limit('call')
+        if not can_proceed:
+            logger.warning(f"Concurrency limit reached for calls: {current_count}/{max_limit}")
+            update_callback_status(request_id, "failed", concurrency_message)
+            return {"success": False, "error": concurrency_message}
+        elif concurrency_message:
+            # Queue or delay action - log the message but proceed
+            logger.info(f"Concurrency limit handling: {concurrency_message}")
 
         # Check cost limits
         within_limits, limit_message, stats = check_cost_limits()
