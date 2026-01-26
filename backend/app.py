@@ -1444,6 +1444,35 @@ def health_check():
     })
 
 
+@app.route("/health/workers", methods=["GET"])
+def worker_health_endpoint():
+    """
+    Expose worker health status.
+    Requires admin authentication.
+
+    Returns:
+        JSON with worker health status and Twilio API health
+    """
+    # Check admin authentication
+    auth_result = check_admin_auth()
+    if auth_result:
+        return auth_result
+
+    # Get worker health status
+    health_report = check_worker_health()
+
+    # Check Twilio API health
+    twilio_healthy = check_twilio_api_health()
+
+    return jsonify({
+        "workers": health_report,
+        "twilio_api": {
+            "healthy": twilio_healthy,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    })
+
+
 @app.route("/metrics", methods=["GET"])
 def metrics():
     """
@@ -3321,6 +3350,146 @@ except Exception as e:
     logger.error(f"Error starting scheduler: {str(e)}")
 
 
+# ============================================================
+# WORKER HEALTH MONITORING
+# ============================================================
+
+import signal
+import atexit
+
+# Worker heartbeat tracking
+worker_heartbeats = {}
+worker_start_times = {}
+worker_failure_counts = {}
+
+# Prometheus metrics for worker health
+from prometheus_client import Gauge, Counter
+worker_uptime_seconds = Gauge('worker_uptime_seconds', 'Worker uptime in seconds', ['worker'])
+worker_failures_total = Counter('worker_failures_total', 'Total worker failures', ['worker'])
+worker_last_heartbeat_timestamp = Gauge('worker_last_heartbeat_timestamp', 'Timestamp of last heartbeat', ['worker'])
+worker_health_status = Gauge('worker_health_status', 'Worker health status (1=healthy, 0=unhealthy)', ['worker'])
+
+# Twilio API health tracking
+twilio_api_health_status = Gauge('twilio_api_health_status', 'Twilio API health (1=healthy, 0=unhealthy)')
+twilio_api_failures_total = Counter('twilio_api_failures_total', 'Total Twilio API failures', ['error_type'])
+
+
+def update_worker_heartbeat(worker_name):
+    """Update heartbeat timestamp for a worker."""
+    now = datetime.utcnow()
+    worker_heartbeats[worker_name] = now
+    worker_last_heartbeat_timestamp.labels(worker=worker_name).set(now.timestamp())
+    worker_health_status.labels(worker=worker_name).set(1)  # Healthy
+
+
+def check_worker_health():
+    """
+    Check if workers are alive based on heartbeat.
+
+    Returns:
+        dict: Worker health status
+    """
+    now = datetime.utcnow()
+    health_report = {}
+
+    for worker_name, last_heartbeat in worker_heartbeats.items():
+        age_seconds = (now - last_heartbeat).total_seconds()
+        is_healthy = age_seconds < 120  # 2 minutes without heartbeat = unhealthy
+
+        health_report[worker_name] = {
+            "healthy": is_healthy,
+            "last_heartbeat": last_heartbeat.isoformat(),
+            "age_seconds": age_seconds,
+            "uptime_seconds": (now - worker_start_times.get(worker_name, now)).total_seconds(),
+            "failure_count": worker_failure_counts.get(worker_name, 0)
+        }
+
+        # Update Prometheus metrics
+        worker_health_status.labels(worker=worker_name).set(1 if is_healthy else 0)
+
+        if not is_healthy:
+            logger.error(f"Worker {worker_name} appears dead (no heartbeat for {age_seconds:.0f}s)")
+
+    return health_report
+
+
+def check_twilio_api_health():
+    """
+    Check Twilio API health by making a lightweight API call.
+
+    Returns:
+        bool: True if Twilio API is healthy
+    """
+    if not twilio_client:
+        twilio_api_health_status.set(0)
+        return False
+
+    try:
+        # Lightweight API call - fetch account info
+        account = twilio_client.api.accounts(TWILIO_SID).fetch()
+        if account.status == 'active':
+            twilio_api_health_status.set(1)
+            return True
+        else:
+            logger.warning(f"Twilio account status: {account.status}")
+            twilio_api_health_status.set(0)
+            twilio_api_failures_total.labels(error_type='account_inactive').inc()
+            return False
+    except Exception as e:
+        logger.error(f"Twilio API health check failed: {str(e)}")
+        twilio_api_health_status.set(0)
+        twilio_api_failures_total.labels(error_type='api_error').inc()
+        return False
+
+
+def monitored_worker(worker_func, worker_name, restart_on_failure=True):
+    """
+    Wrapper for worker functions that adds health monitoring and auto-restart.
+
+    Args:
+        worker_func: The worker function to run
+        worker_name: Name of the worker for logging/metrics
+        restart_on_failure: Whether to restart worker on crash
+    """
+    import time
+
+    worker_start_times[worker_name] = datetime.utcnow()
+    worker_failure_counts[worker_name] = 0
+
+    logger.info(f"Worker {worker_name} started with monitoring")
+
+    while True:
+        try:
+            # Update heartbeat before running
+            update_worker_heartbeat(worker_name)
+
+            # Update uptime metric
+            uptime = (datetime.utcnow() - worker_start_times[worker_name]).total_seconds()
+            worker_uptime_seconds.labels(worker=worker_name).set(uptime)
+
+            # Run the worker function
+            worker_func()
+
+        except Exception as e:
+            worker_failure_counts[worker_name] = worker_failure_counts.get(worker_name, 0) + 1
+            worker_failures_total.labels(worker=worker_name).inc()
+            worker_health_status.labels(worker=worker_name).set(0)  # Mark unhealthy
+
+            logger.error(f"Worker {worker_name} crashed: {str(e)}", exc_info=True)
+
+            if not restart_on_failure:
+                logger.error(f"Worker {worker_name} terminated (restart disabled)")
+                break
+
+            # Wait before restart to avoid rapid crash loops
+            restart_delay = min(5 * worker_failure_counts[worker_name], 60)  # Max 60s
+            logger.info(f"Restarting worker {worker_name} in {restart_delay}s...")
+            time.sleep(restart_delay)
+
+            # Reset start time on restart
+            worker_start_times[worker_name] = datetime.utcnow()
+
+
 # Background retry processor
 def retry_processor_worker():
     """
@@ -3330,23 +3499,55 @@ def retry_processor_worker():
     that are due for retry.
     """
     import time
-    logger.info("Retry processor worker started")
 
     while True:
         try:
             process_retry_queue()
         except Exception as e:
-            logger.error(f"Error in retry processor worker: {str(e)}", exc_info=True)
+            logger.error(f"Error in retry processor: {str(e)}", exc_info=True)
+            raise  # Re-raise to trigger monitored_worker restart logic
 
         # Sleep for 60 seconds before next check
         time.sleep(60)
 
 
-# Start background retry processor thread
+# Graceful shutdown handler
+def graceful_shutdown(signum, frame):
+    """Handle SIGTERM/SIGINT for graceful shutdown."""
+    logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+
+    # Stop scheduler
+    try:
+        if scheduler.running:
+            scheduler.shutdown(wait=False)
+            logger.info("Scheduler stopped")
+    except Exception as e:
+        logger.error(f"Error stopping scheduler: {e}")
+
+    # Log final worker health
+    health_report = check_worker_health()
+    logger.info(f"Final worker health: {health_report}")
+
+    logger.info("Graceful shutdown complete")
+    sys.exit(0)
+
+
+# Register signal handlers
+signal.signal(signal.SIGTERM, graceful_shutdown)
+signal.signal(signal.SIGINT, graceful_shutdown)
+
+# Register cleanup on normal exit
+atexit.register(lambda: logger.info("Application exiting"))
+
+
+# Start background retry processor thread with monitoring
 import threading
-retry_thread = threading.Thread(target=retry_processor_worker, daemon=True)
+retry_thread = threading.Thread(
+    target=lambda: monitored_worker(retry_processor_worker, "retry_processor", restart_on_failure=True),
+    daemon=True
+)
 retry_thread.start()
-logger.info("Background retry processor thread started")
+logger.info("Background retry processor thread started with health monitoring")
 
 
 if __name__ == "__main__":
