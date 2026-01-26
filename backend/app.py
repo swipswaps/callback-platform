@@ -53,6 +53,18 @@ if not logger.handlers:
     file_handler.setFormatter(logging.Formatter(LOG_FORMAT, LOG_DATE_FORMAT))
     logger.addHandler(file_handler)
 
+# Priority levels for queue prioritization
+PRIORITY_HIGH = 'high'
+PRIORITY_DEFAULT = 'default'
+PRIORITY_LOW = 'low'
+
+# Priority order mapping (lower number = higher priority)
+PRIORITY_ORDER = {
+    PRIORITY_HIGH: 1,
+    PRIORITY_DEFAULT: 2,
+    PRIORITY_LOW: 3
+}
+
 # Initialize Flask app
 app = Flask(__name__)
 
@@ -120,6 +132,13 @@ verification_attempts_total = Counter(
     'verification_attempts_total',
     'Total verification attempts',
     ['result']
+)
+
+# Track callback requests by priority
+callback_requests_by_priority = Counter(
+    'callback_requests_by_priority_total',
+    'Total callback requests by priority level',
+    ['priority']
 )
 
 # Configuration from environment variables
@@ -916,6 +935,12 @@ def migrate_database():
             cursor.execute("ALTER TABLE callbacks ADD COLUMN last_retry_at TEXT")
             needs_migration = True
 
+        # Add priority column if missing
+        if 'priority' not in columns:
+            logger.info("Adding priority column to callbacks table")
+            cursor.execute("ALTER TABLE callbacks ADD COLUMN priority TEXT DEFAULT 'default'")
+            needs_migration = True
+
         if needs_migration:
             # Create indexes for new columns
             try:
@@ -933,6 +958,19 @@ def migrate_database():
                     CREATE INDEX IF NOT EXISTS idx_callbacks_retry_at
                     ON callbacks(retry_at)
                 """)
+                logger.info("Created retry_at index")
+            except Exception as e:
+                logger.warning(f"Could not create retry_at index: {e}")
+
+            # Create index on priority and retry_at for efficient queue processing
+            try:
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_callbacks_priority_retry
+                    ON callbacks(priority, retry_at, request_status)
+                """)
+                logger.info("Created priority_retry index")
+            except Exception as e:
+                logger.warning(f"Could not create priority_retry index: {e}")
                 logger.info("Created retry_at index")
             except Exception as e:
                 logger.warning(f"Could not create retry_at index: {e}")
@@ -976,7 +1014,8 @@ def init_database():
             retry_count INTEGER DEFAULT 0,
             max_retries INTEGER DEFAULT 3,
             retry_at TEXT,
-            last_retry_at TEXT
+            last_retry_at TEXT,
+            priority TEXT DEFAULT 'default'
         )
     """)
 
@@ -1248,6 +1287,35 @@ def log_audit_event(request_id, event_type, event_data=None):
         logger.error(f"Failed to log audit event: {str(e)}")
 
 
+def determine_priority(visitor_phone, visitor_email=None):
+    """
+    Determine callback priority based on visitor information.
+
+    Priority rules:
+    - High: VIP phone numbers (configurable list)
+    - Default: Regular customers
+    - Low: Could be used for batch operations or non-urgent requests
+
+    Args:
+        visitor_phone: Visitor's phone number
+        visitor_email: Visitor's email (optional, for future VIP detection)
+
+    Returns:
+        str: Priority level ('high', 'default', or 'low')
+    """
+    # VIP phone numbers (could be loaded from env var or database)
+    vip_phones = os.environ.get("VIP_PHONE_NUMBERS", "").split(",")
+    vip_phones = [p.strip() for p in vip_phones if p.strip()]
+
+    # Check if visitor is VIP
+    if visitor_phone in vip_phones:
+        logger.info(f"VIP customer detected: {visitor_phone}")
+        return PRIORITY_HIGH
+
+    # Default priority for regular customers
+    return PRIORITY_DEFAULT
+
+
 def update_callback_status(request_id, status, message=None, call_sid=None, sms_sid=None):
     """Update callback status in database."""
     try:
@@ -1381,20 +1449,34 @@ def process_retry_queue():
     """
     Process the retry queue - find requests that are due for retry and initiate callbacks.
 
+    Processes requests in priority order:
+    1. High priority first
+    2. Default priority second
+    3. Low priority last
+
+    Within each priority level, processes oldest requests first (FIFO).
+
     This function should be called periodically (e.g., every minute) by a background job.
     """
     try:
         conn = sqlite3.connect(DATABASE_PATH)
         cursor = conn.cursor()
 
-        # Find requests that are due for retry
+        # Find requests that are due for retry, ordered by priority then time
         now = datetime.utcnow().isoformat()
         cursor.execute("""
-            SELECT request_id, visitor_name, visitor_email, visitor_phone, retry_count, max_retries
+            SELECT request_id, visitor_name, visitor_email, visitor_phone, retry_count, max_retries, priority
             FROM callbacks
             WHERE request_status = 'retry_scheduled'
             AND retry_at <= ?
-            ORDER BY retry_at ASC
+            ORDER BY
+                CASE priority
+                    WHEN 'high' THEN 1
+                    WHEN 'default' THEN 2
+                    WHEN 'low' THEN 3
+                    ELSE 2
+                END ASC,
+                retry_at ASC
             LIMIT 10
         """, (now,))
 
@@ -1405,12 +1487,12 @@ def process_retry_queue():
             logger.debug("No retries due at this time")
             return
 
-        logger.info(f"Processing {len(rows)} retry requests")
+        logger.info(f"Processing {len(rows)} retry requests (priority-ordered)")
 
         for row in rows:
-            request_id, visitor_name, visitor_email, visitor_phone, retry_count, max_retries = row
+            request_id, visitor_name, visitor_email, visitor_phone, retry_count, max_retries, priority = row
 
-            logger.info(f"Processing retry for {request_id}: attempt {retry_count}/{max_retries}")
+            logger.info(f"Processing retry for {request_id} [priority={priority}]: attempt {retry_count}/{max_retries}")
 
             # Attempt the callback
             result = initiate_callback_internal(request_id, visitor_name, visitor_email, visitor_phone)
@@ -2000,9 +2082,12 @@ def request_callback():
         # Generate unique request ID
         request_id = str(uuid.uuid4())
 
-        logger.info(f"Callback request received: {request_id} from {visitor_phone} (fingerprint: {fingerprint[:16]}...)")
+        # Determine priority based on visitor information
+        priority = determine_priority(visitor_phone, visitor_email)
 
-        # Store in database with security metadata
+        logger.info(f"Callback request received: {request_id} from {visitor_phone} [priority={priority}] (fingerprint: {fingerprint[:16]}...)")
+
+        # Store in database with security metadata and priority
         conn = sqlite3.connect(DATABASE_PATH)
         cursor = conn.cursor()
 
@@ -2010,8 +2095,8 @@ def request_callback():
             INSERT INTO callbacks (
                 request_id, visitor_name, visitor_email, visitor_phone,
                 request_status, created_at, updated_at,
-                ip_address, user_agent, fingerprint
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ip_address, user_agent, fingerprint, priority
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             request_id,
             visitor_name,
@@ -2022,19 +2107,22 @@ def request_callback():
             datetime.utcnow().isoformat(),
             ip_address,
             user_agent,
-            fingerprint
+            fingerprint,
+            priority
         ))
 
         conn.commit()
         conn.close()
 
-        # Increment Prometheus metric for pending requests
+        # Increment Prometheus metrics for pending requests and priority
         callback_requests_total.labels(status='pending').inc()
+        callback_requests_by_priority.labels(priority=priority).inc()
 
         log_audit_event(request_id, "callback_requested", {
             "visitor_phone": visitor_phone,
             "has_name": bool(visitor_name),
-            "has_email": bool(visitor_email)
+            "has_email": bool(visitor_email),
+            "priority": priority
         })
 
         # NEW FLOW: Return request_id and ask user to verify phone via SMS
@@ -2762,7 +2850,7 @@ def admin_get_requests():
         query = """
             SELECT request_id, visitor_name, visitor_email, visitor_phone,
                    request_status, status_message, created_at, updated_at,
-                   call_sid, sms_sid, ip_address, user_agent, fingerprint
+                   call_sid, sms_sid, ip_address, user_agent, fingerprint, priority
             FROM callbacks
             WHERE 1=1
         """
@@ -2796,7 +2884,8 @@ def admin_get_requests():
                 "sms_sid": row[9],
                 "ip_address": row[10],
                 "user_agent": row[11],
-                "fingerprint": row[12][:16] + "..." if row[12] else None  # Truncate fingerprint
+                "fingerprint": row[12][:16] + "..." if row[12] else None,  # Truncate fingerprint
+                "priority": row[13] if len(row) > 13 else 'default'
             })
 
         # Get total count for pagination
