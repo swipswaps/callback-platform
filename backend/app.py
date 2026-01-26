@@ -141,6 +141,25 @@ callback_requests_by_priority = Counter(
     ['priority']
 )
 
+# Track escalations
+escalations_total = Counter(
+    'escalations_total',
+    'Total number of escalations',
+    ['level']
+)
+
+escalation_success_total = Counter(
+    'escalation_success_total',
+    'Total successful escalations',
+    ['level']
+)
+
+escalation_failures_total = Counter(
+    'escalation_failures_total',
+    'Total failed escalations',
+    ['level']
+)
+
 # Configuration from environment variables
 TWILIO_SID = os.environ.get("TWILIO_SID", "")
 TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
@@ -163,6 +182,12 @@ BUSINESS_HOURS_START = os.environ.get("BUSINESS_HOURS_START", "09:00")  # 9 AM
 BUSINESS_HOURS_END = os.environ.get("BUSINESS_HOURS_END", "17:00")  # 5 PM
 BUSINESS_TIMEZONE = os.environ.get("BUSINESS_TIMEZONE", "America/New_York")
 BUSINESS_WEEKDAYS_ONLY = os.environ.get("BUSINESS_WEEKDAYS_ONLY", "true").lower() == "true"
+
+# Escalation policy configuration
+ESCALATION_ENABLED = os.environ.get("ESCALATION_ENABLED", "false").lower() == "true"
+ESCALATION_TIMEOUT_MINUTES = int(os.environ.get("ESCALATION_TIMEOUT_MINUTES", "5"))  # Escalate after 5 minutes of no answer
+ESCALATION_CHAIN = os.environ.get("ESCALATION_CHAIN", "")  # Comma-separated backup numbers: +1234567890,+0987654321
+ESCALATION_MAX_LEVEL = int(os.environ.get("ESCALATION_MAX_LEVEL", "2"))  # Max escalation levels (0=primary, 1=first backup, 2=second backup)
 
 # Cost protection limits
 MAX_CALLS_PER_DAY = int(os.environ.get("MAX_CALLS_PER_DAY", "100"))
@@ -941,6 +966,22 @@ def migrate_database():
             cursor.execute("ALTER TABLE callbacks ADD COLUMN priority TEXT DEFAULT 'default'")
             needs_migration = True
 
+        # Add escalation columns if missing
+        if 'escalation_level' not in columns:
+            logger.info("Adding escalation_level column to callbacks table")
+            cursor.execute("ALTER TABLE callbacks ADD COLUMN escalation_level INTEGER DEFAULT 0")
+            needs_migration = True
+
+        if 'escalation_at' not in columns:
+            logger.info("Adding escalation_at column to callbacks table")
+            cursor.execute("ALTER TABLE callbacks ADD COLUMN escalation_at TEXT")
+            needs_migration = True
+
+        if 'escalated_to' not in columns:
+            logger.info("Adding escalated_to column to callbacks table")
+            cursor.execute("ALTER TABLE callbacks ADD COLUMN escalated_to TEXT")
+            needs_migration = True
+
         if needs_migration:
             # Create indexes for new columns
             try:
@@ -1015,7 +1056,10 @@ def init_database():
             max_retries INTEGER DEFAULT 3,
             retry_at TEXT,
             last_retry_at TEXT,
-            priority TEXT DEFAULT 'default'
+            priority TEXT DEFAULT 'default',
+            escalation_level INTEGER DEFAULT 0,
+            escalation_at TEXT,
+            escalated_to TEXT
         )
     """)
 
@@ -1314,6 +1358,210 @@ def determine_priority(visitor_phone, visitor_email=None):
 
     # Default priority for regular customers
     return PRIORITY_DEFAULT
+
+
+def get_escalation_chain():
+    """
+    Parse escalation chain from environment variable.
+
+    Returns:
+        list: List of backup phone numbers in escalation order
+    """
+    if not ESCALATION_CHAIN:
+        return []
+
+    chain = [num.strip() for num in ESCALATION_CHAIN.split(",") if num.strip()]
+    logger.debug(f"Escalation chain configured with {len(chain)} backup number(s)")
+    return chain
+
+
+def get_escalation_target(escalation_level):
+    """
+    Get the phone number to call for a given escalation level.
+
+    Args:
+        escalation_level (int): Current escalation level (0=primary, 1=first backup, etc.)
+
+    Returns:
+        str or None: Phone number to call, or None if no more escalation targets
+    """
+    if escalation_level == 0:
+        # Level 0 = primary business number
+        return BUSINESS_NUMBER
+
+    # Level 1+ = backup numbers from escalation chain
+    chain = get_escalation_chain()
+    backup_index = escalation_level - 1
+
+    if backup_index < len(chain):
+        return chain[backup_index]
+
+    # No more escalation targets
+    return None
+
+
+def should_escalate(request_id):
+    """
+    Check if a request should be escalated based on timeout.
+
+    Args:
+        request_id: The callback request ID
+
+    Returns:
+        tuple: (should_escalate: bool, current_level: int, next_target: str or None)
+    """
+    if not ESCALATION_ENABLED:
+        return False, 0, None
+
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT request_status, created_at, escalation_level, escalation_at
+            FROM callbacks
+            WHERE request_id = ?
+        """, (request_id,))
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row:
+            return False, 0, None
+
+        request_status, created_at, escalation_level, escalation_at = row
+
+        # Only escalate if status is 'calling' (unanswered)
+        if request_status != 'calling':
+            return False, escalation_level or 0, None
+
+        # Check if escalation timeout has passed
+        reference_time = escalation_at if escalation_at else created_at
+        reference_dt = datetime.fromisoformat(reference_time)
+        timeout_dt = reference_dt + timedelta(minutes=ESCALATION_TIMEOUT_MINUTES)
+        now = datetime.utcnow()
+
+        if now < timeout_dt:
+            # Not yet time to escalate
+            return False, escalation_level or 0, None
+
+        # Check if we've reached max escalation level
+        current_level = escalation_level or 0
+        next_level = current_level + 1
+
+        if next_level > ESCALATION_MAX_LEVEL:
+            logger.info(f"Request {request_id} has reached max escalation level ({ESCALATION_MAX_LEVEL})")
+            return False, current_level, None
+
+        # Get next escalation target
+        next_target = get_escalation_target(next_level)
+
+        if not next_target:
+            logger.warning(f"No escalation target available for level {next_level}")
+            return False, current_level, None
+
+        logger.info(f"Request {request_id} should escalate from level {current_level} to {next_level} (target: {next_target})")
+        return True, next_level, next_target
+
+    except Exception as e:
+        logger.error(f"Error checking escalation for {request_id}: {str(e)}")
+        return False, 0, None
+
+
+def escalate_request(request_id, new_level, target_number):
+    """
+    Escalate a callback request to the next level in the escalation chain.
+
+    Args:
+        request_id: The callback request ID
+        new_level: The new escalation level
+        target_number: The phone number to call
+
+    Returns:
+        dict: Result of escalation attempt
+    """
+    try:
+        logger.info(f"Escalating request {request_id} to level {new_level} (calling {target_number})")
+
+        # Update escalation tracking in database
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            UPDATE callbacks
+            SET escalation_level = ?,
+                escalation_at = ?,
+                escalated_to = ?,
+                updated_at = ?
+            WHERE request_id = ?
+        """, (
+            new_level,
+            datetime.utcnow().isoformat(),
+            target_number,
+            datetime.utcnow().isoformat(),
+            request_id
+        ))
+
+        conn.commit()
+        conn.close()
+
+        # Get visitor info for the call
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT visitor_name, visitor_phone
+            FROM callbacks
+            WHERE request_id = ?
+        """, (request_id,))
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row:
+            return {"success": False, "error": "Request not found"}
+
+        visitor_name, visitor_phone = row
+
+        # Initiate call to escalation target
+        if callback_provider and callback_provider.is_configured():
+            # Determine from_number based on provider
+            if isinstance(callback_provider, TwilioProvider):
+                from_number = TWILIO_NUMBER
+            elif isinstance(callback_provider, AsteriskProvider):
+                from_number = visitor_phone
+            else:
+                from_number = target_number
+
+            call_result = callback_provider.make_call(
+                to_number=target_number,
+                from_number=from_number,
+                request_id=request_id
+            )
+
+            if call_result['success']:
+                update_callback_status(
+                    request_id,
+                    "calling",
+                    f"Escalated to level {new_level} ({target_number})",
+                    call_sid=call_result['call_sid']
+                )
+
+                log_audit_event(request_id, "escalated", {
+                    "level": new_level,
+                    "target": target_number,
+                    "call_sid": call_result['call_sid']
+                })
+
+                logger.info(f"Escalation call initiated: {call_result['call_sid']}")
+                return {"success": True, "call_sid": call_result['call_sid'], "level": new_level}
+            else:
+                logger.error(f"Escalation call failed: {call_result['message']}")
+                return {"success": False, "error": call_result['message']}
+        else:
+            return {"success": False, "error": "Callback provider not configured"}
+
+    except Exception as e:
+        logger.error(f"Error escalating request {request_id}: {str(e)}", exc_info=True)
+        return {"success": False, "error": str(e)}
 
 
 def update_callback_status(request_id, status, message=None, call_sid=None, sms_sid=None):
@@ -2850,7 +3098,8 @@ def admin_get_requests():
         query = """
             SELECT request_id, visitor_name, visitor_email, visitor_phone,
                    request_status, status_message, created_at, updated_at,
-                   call_sid, sms_sid, ip_address, user_agent, fingerprint, priority
+                   call_sid, sms_sid, ip_address, user_agent, fingerprint, priority,
+                   escalation_level, escalation_at, escalated_to
             FROM callbacks
             WHERE 1=1
         """
@@ -2885,7 +3134,10 @@ def admin_get_requests():
                 "ip_address": row[10],
                 "user_agent": row[11],
                 "fingerprint": row[12][:16] + "..." if row[12] else None,  # Truncate fingerprint
-                "priority": row[13] if len(row) > 13 else 'default'
+                "priority": row[13] if len(row) > 13 else 'default',
+                "escalation_level": row[14] if len(row) > 14 else 0,
+                "escalation_at": row[15] if len(row) > 15 else None,
+                "escalated_to": row[16] if len(row) > 16 else None
             })
 
         # Get total count for pagination
@@ -3060,6 +3312,75 @@ def initiate_callback_internal(request_id, visitor_name, visitor_email, visitor_
 # ============================================================
 # RECURRING TASKS SYSTEM
 # ============================================================
+
+def process_escalation_queue():
+    """
+    Check for callback requests that need escalation and escalate them.
+
+    This function should be called periodically (e.g., every minute) by a background job.
+    It checks for requests in 'calling' status that have exceeded the escalation timeout
+    and escalates them to the next level in the escalation chain.
+
+    Returns:
+        int: Number of requests escalated
+    """
+    if not ESCALATION_ENABLED:
+        logger.debug("Escalation disabled, skipping escalation queue processing")
+        return 0
+
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+
+        # Find requests in 'calling' status that might need escalation
+        cursor.execute("""
+            SELECT request_id
+            FROM callbacks
+            WHERE request_status = 'calling'
+            AND (escalation_level IS NULL OR escalation_level < ?)
+        """, (ESCALATION_MAX_LEVEL,))
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        if not rows:
+            logger.debug("No requests pending escalation")
+            return 0
+
+        escalated_count = 0
+
+        for row in rows:
+            request_id = row[0]
+
+            # Check if this request should be escalated
+            should_esc, next_level, next_target = should_escalate(request_id)
+
+            if should_esc:
+                logger.info(f"Escalating request {request_id} to level {next_level}")
+
+                # Attempt escalation
+                result = escalate_request(request_id, next_level, next_target)
+
+                # Track metrics
+                escalations_total.labels(level=str(next_level)).inc()
+
+                if result['success']:
+                    escalated_count += 1
+                    escalation_success_total.labels(level=str(next_level)).inc()
+                    logger.info(f"Successfully escalated {request_id} to level {next_level}")
+                else:
+                    escalation_failures_total.labels(level=str(next_level)).inc()
+                    logger.error(f"Failed to escalate {request_id}: {result.get('error')}")
+
+        if escalated_count > 0:
+            logger.info(f"Escalation queue processed: {escalated_count} request(s) escalated")
+
+        return escalated_count
+
+    except Exception as e:
+        logger.error(f"Error processing escalation queue: {str(e)}", exc_info=True)
+        return 0
+
 
 def cleanup_old_requests(max_age_days=90):
     """
@@ -3379,7 +3700,8 @@ task_functions = {
     'send_daily_compliance_report': send_daily_compliance_report,
     'cleanup_stuck_requests': cleanup_stuck_requests,
     'analyze_fingerprint_abuse_patterns': analyze_fingerprint_abuse_patterns,
-    'check_daily_cost_thresholds': check_daily_cost_thresholds
+    'check_daily_cost_thresholds': check_daily_cost_thresholds,
+    'process_escalation_queue': process_escalation_queue
 }
 
 # Load and register recurring tasks from YAML config

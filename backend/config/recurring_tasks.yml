@@ -70,3 +70,11 @@ tasks:
     params:
       warning_threshold: 0.8  # Warn at 80%
 
+  # Process escalation queue (advanced feature)
+  process_escalation_queue:
+    enabled: true
+    schedule: "*/1 * * * *"  # Every minute
+    function: process_escalation_queue
+    description: "Check for unanswered calls and escalate to backup numbers"
+    params: {}
+
