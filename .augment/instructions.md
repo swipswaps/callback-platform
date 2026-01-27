@@ -32,45 +32,60 @@ echo "START: descriptive action" && command 2>&1 | tee /tmp/descriptive_name_$(d
 **CORRECT PATTERN:**
 ```
 STEP 1: Launch command with echo markers
-  launch-process: echo "START: git push" && git push origin main 2>&1 | tee /tmp/git_push_$(date +%s).log && echo "END: git push"
+  launch-process: echo "START: git push" && git push origin main 2>&1 && echo "END: git push"
+  (Note: Use wait=true for commands that must complete before proceeding)
 
-STEP 2: Wait for response, get terminal ID
+STEP 2: Tool returns with output OR timeout
 
-STEP 3: Read terminal in NEXT tool block
-  read-terminal OR read-process: terminal_id=[actual ID from step 2]
+STEP 3: The output is ALREADY IN THE TOOL RESULT - read it from there!
+  - If wait=true: Output is in the <output> section of tool result
+  - If timeout occurs: Partial output is STILL in the <output> section
+  - DO NOT call read-terminal or read-process - the data is already provided!
 
-STEP 4: ONLY AFTER reading terminal, reason about results
+STEP 4: ONLY AFTER reading the tool result output, reason about results
 
-NEVER guess terminal IDs
-NEVER call both in same <function_calls> block
-NEVER reason without reading terminal first
+CRITICAL: When launch-process with wait=true completes or times out,
+the output is in the TOOL RESULT itself. You already have it.
+DO NOT waste a turn calling read-terminal!
+
+NEVER call read-terminal after launch-process with wait=true
+NEVER ignore the output already in the tool result
+NEVER reason without reading the tool result output first
 ```
 
 **BEFORE reasoning about ANY command output:**
 ```
-IF command was launched THEN
-    MUST call read-terminal or read-process FIRST
-    MUST NOT call read-process in same tool block as launch-process
-    MUST NOT guess terminal IDs
-    MUST NOT reason about output without reading terminal
+IF command was launched with wait=true THEN
+    Output is ALREADY in the tool result <output> section
+    MUST read the tool result output FIRST (it's already there!)
+    MUST NOT call read-terminal (wastes a turn - data already provided)
+    MUST NOT reason about output without reading the tool result
     MUST NOT assume command succeeded without evidence
-    MUST NOT launch another command to "check" results without reading terminal first
+    MUST NOT launch another command to "check" results
 
     FORBIDDEN EVASION PATTERNS:
-    ❌ Command times out → launch "git status" to check → reason about git status
-    ❌ Command times out → launch "git log" to check → reason about git log
-    ✅ Command times out → read-terminal → see actual output → reason based on evidence
+    ❌ Command times out → call read-terminal (data already in tool result!)
+    ❌ Command times out → launch "git status" to check
+    ❌ Command times out → launch "git log" to check
+    ✅ Command times out → READ THE TOOL RESULT OUTPUT (already there!) → reason based on evidence
+    ✅ Tool result shows "END: git push" → command succeeded even if timeout occurred
+END IF
+
+IF command was launched with wait=false THEN
+    MUST use read-process with terminal_id to get output
+    MUST NOT use read-terminal (doesn't accept terminal_id parameter)
 END IF
 ```
 
 **Violation Example:**
 ```
 ❌ BAD: launch-process + read-process in same tool block
-❌ BAD: "Let me check git status" → launches command → reasons without reading terminal
+❌ BAD: git push times out → call read-terminal (WASTES TURN - output already in tool result!)
 ❌ BAD: git push times out → launch "git status" → reason about status (EVASION!)
 ❌ BAD: git push times out → launch "git log" → reason about log (EVASION!)
-✅ GOOD: launch-process → wait for terminal ID → read-terminal in next block → reason based on output
-✅ GOOD: git push times out → read-terminal → see "Total 4 (delta 2)" → confirm success
+✅ GOOD: launch-process with wait=true → tool returns → READ TOOL RESULT OUTPUT → reason
+✅ GOOD: git push times out → READ TOOL RESULT → see "END: git push" → confirm success
+✅ GOOD: Tool result shows "Total 4 (delta 2)" in output → command succeeded
 ```
 
 ### 🔴 RULE 8 VIOLATION DETECTOR
