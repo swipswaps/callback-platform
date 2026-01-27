@@ -24,7 +24,10 @@
         <p>Enter your admin API token to access the dashboard</p>
         <div class="form-group">
           <label for="apiToken">API Token:</label>
-          <input type="password" id="apiToken" placeholder="Enter Bearer token" class="form-control">
+          <div class="input-with-button">
+            <input type="password" id="apiToken" placeholder="Enter Bearer token" class="form-control">
+            <button id="pasteTokenBtn" class="btn btn-icon" title="Paste from clipboard">📋</button>
+          </div>
         </div>
         <button id="loginBtn" class="btn btn-primary">Login</button>
         <div id="authError" class="error-message" style="display: none;"></div>
@@ -133,6 +136,23 @@
         </div>
       </section>
 
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div id="toastContainer" class="toast-container"></div>
+
+  <!-- Keyboard Shortcuts Help Modal -->
+  <div id="shortcutsModal" class="modal" style="display: none;">
+    <div class="modal-content">
+      <h2>⌨️ Keyboard Shortcuts</h2>
+      <table class="shortcuts-table">
+        <tr><td><kbd>Ctrl</kbd> + <kbd>R</kbd></td><td>Refresh dashboard</td></tr>
+        <tr><td><kbd>Ctrl</kbd> + <kbd>K</kbd></td><td>Focus search filter</td></tr>
+        <tr><td><kbd>Escape</kbd></td><td>Clear all filters</td></tr>
+        <tr><td><kbd>?</kbd></td><td>Show this help</td></tr>
+      </table>
+      <button onclick="closeShortcutsModal()" class="btn btn-primary">Close</button>
     </div>
   </div>
 

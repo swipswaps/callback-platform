@@ -11,10 +11,56 @@ let currentFilters = {
   phone: ''
 };
 
+// Toast Notification System
+function showToast(message, type = 'info', duration = 3000) {
+  const container = document.getElementById('toastContainer');
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`;
+
+  const icons = {
+    success: '✅',
+    error: '❌',
+    warning: '⚠️',
+    info: 'ℹ️'
+  };
+
+  toast.innerHTML = `
+    <span class="toast-icon">${icons[type] || icons.info}</span>
+    <span class="toast-message">${message}</span>
+    <button class="toast-close" onclick="this.parentElement.remove()">×</button>
+  `;
+
+  container.appendChild(toast);
+
+  // Auto-remove after duration
+  if (duration > 0) {
+    setTimeout(() => {
+      toast.style.animation = 'slideIn 0.3s ease-out reverse';
+      setTimeout(() => toast.remove(), 300);
+    }, duration);
+  }
+
+  return toast;
+}
+
+// Copy to clipboard helper
+async function copyToClipboard(text, successMessage = 'Copied to clipboard!') {
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast(successMessage, 'success', 2000);
+    return true;
+  } catch (err) {
+    console.error('Failed to copy:', err);
+    showToast('Failed to copy to clipboard', 'error');
+    return false;
+  }
+}
+
 // DOM Elements
 const authSection = document.getElementById('authSection');
 const dashboardContent = document.getElementById('dashboardContent');
 const apiTokenInput = document.getElementById('apiToken');
+const pasteTokenBtn = document.getElementById('pasteTokenBtn');
 const loginBtn = document.getElementById('loginBtn');
 const authError = document.getElementById('authError');
 const refreshBtn = document.getElementById('refreshBtn');
@@ -50,6 +96,22 @@ apiTokenInput.addEventListener('keypress', (e) => {
   if (e.key === 'Enter') handleLogin();
 });
 
+// Paste from clipboard button
+pasteTokenBtn.addEventListener('click', async () => {
+  try {
+    const text = await navigator.clipboard.readText();
+    apiTokenInput.value = text.trim();
+    showToast('Token pasted from clipboard', 'success', 2000);
+    // Trigger auto-login if token looks valid
+    if (text.trim().length >= 20) {
+      setTimeout(() => handleLogin(), 500);
+    }
+  } catch (err) {
+    console.error('Failed to read clipboard:', err);
+    showToast('Failed to read clipboard. Please paste manually.', 'error');
+  }
+});
+
 // Auto-login when token is pasted or entered
 apiTokenInput.addEventListener('input', async (e) => {
   const token = e.target.value.trim();
@@ -69,6 +131,42 @@ applyFiltersBtn.addEventListener('click', applyFilters);
 clearFiltersBtn.addEventListener('click', clearFilters);
 prevPageBtn.addEventListener('click', () => changePage(-1));
 nextPageBtn.addEventListener('click', () => changePage(1));
+
+// Keyboard Shortcuts
+document.addEventListener('keydown', (e) => {
+  // Ignore if user is typing in an input field
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') {
+    // Allow Escape to clear filters even when in input
+    if (e.key === 'Escape') {
+      clearFilters();
+      e.target.blur();
+    }
+    return;
+  }
+
+  // Ctrl/Cmd + R: Refresh
+  if ((e.ctrlKey || e.metaKey) && e.key === 'r') {
+    e.preventDefault();
+    refreshDashboard();
+    showToast('Dashboard refreshed', 'info', 2000);
+  }
+
+  // Ctrl/Cmd + K: Focus search
+  if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+    e.preventDefault();
+    phoneFilter.focus();
+  }
+
+  // ?: Show keyboard shortcuts
+  if (e.key === '?' && !e.shiftKey) {
+    showShortcutsModal();
+  }
+
+  // Escape: Clear filters
+  if (e.key === 'Escape') {
+    clearFilters();
+  }
+});
 
 // Check if token is stored in localStorage
 window.addEventListener('DOMContentLoaded', () => {
@@ -168,11 +266,11 @@ async function cancelRequest(requestId) {
         setTimeout(() => { row.style.backgroundColor = ''; }, 2000);
       }
     } else {
-      alert(`Failed to cancel request: ${data.error || 'Unknown error'}`);
+      showToast(`Failed to cancel request: ${data.error || 'Unknown error'}`, 'error');
     }
   } catch (error) {
     console.error('Error cancelling request:', error);
-    alert('Failed to cancel request. Please try again.');
+    showToast('Failed to cancel request. Please try again.', 'error');
   }
 }
 
@@ -284,9 +382,21 @@ function renderRequestsTable(requests) {
     actionButtons += `<button class="btn btn-sm btn-secondary" onclick="viewDetails('${req.request_id}')">👁️ View</button>`;
 
     row.innerHTML = `
-      <td><span class="request-id">${req.request_id.substring(0, 8)}...</span></td>
+      <td>
+        <span class="request-id copyable"
+              onclick="copyToClipboard('${req.request_id}', 'Request ID copied!')"
+              title="Click to copy full ID">
+          ${req.request_id.substring(0, 8)}...
+        </span>
+      </td>
       <td>${req.visitor_name || '-'}</td>
-      <td><span class="phone-number">${req.visitor_phone}</span></td>
+      <td>
+        <span class="phone-number copyable"
+              onclick="copyToClipboard('${req.visitor_phone}', 'Phone number copied!')"
+              title="Click to copy phone number">
+          ${req.visitor_phone}
+        </span>
+      </td>
       <td><span class="status-badge status-${status}">${formatStatusText(req.request_status)}</span></td>
       <td><span class="timestamp">${formatTimestamp(req.updated_at)}</span></td>
       <td>
@@ -379,7 +489,7 @@ function viewDetails(requestId) {
   const req = window.currentRequestsData?.find(r => r.request_id === requestId);
 
   if (!req) {
-    alert('Request details not found');
+    showToast('Request details not found', 'error');
     return;
   }
 
@@ -397,7 +507,8 @@ SMS SID: ${req.sms_sid || 'N/A'}
 IP Address: ${req.ip_address || 'N/A'}
   `.trim();
 
-  alert(details);
+  // Show in a better format using toast with longer duration
+  showToast(details.replace(/\n/g, '<br>'), 'info', 10000);
 }
 
 async function retryRequest(requestId) {
@@ -426,12 +537,25 @@ async function retryRequest(requestId) {
         setTimeout(() => { row.style.backgroundColor = ''; }, 2000);
       }
     } else {
-      alert('Failed to retry: ' + (data.error || 'Unknown error'));
+      showToast('Failed to retry: ' + (data.error || 'Unknown error'), 'error');
     }
   } catch (error) {
-    alert('Failed to retry: ' + error.message);
+    showToast('Failed to retry: ' + error.message, 'error');
   }
 }
+
+// Modal functions
+function showShortcutsModal() {
+  document.getElementById('shortcutsModal').style.display = 'flex';
+}
+
+function closeShortcutsModal() {
+  document.getElementById('shortcutsModal').style.display = 'none';
+}
+
+// Make modal functions global
+window.showShortcutsModal = showShortcutsModal;
+window.closeShortcutsModal = closeShortcutsModal;
 
 
 
