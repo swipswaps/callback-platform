@@ -95,23 +95,16 @@ echo "START: descriptive action" && command 2>&1 | tee /tmp/descriptive_name_$(d
 
 ---
 
-## RULE 9 — MANDATORY LOG REVIEW 🔴
+## RULE 9 — MANDATORY LOG REVIEW
 
-**CRITICAL: Terminal output MUST be read BEFORE any reasoning about command results.**
+Logs must be reviewed before reasoning or fixes.
 
-**FORBIDDEN EVASION PATTERNS:**
-- ❌ Command times out → launch "git status" to check results (EVASION!)
-- ❌ Command times out → launch "git log" to check results (EVASION!)
-- ❌ Command completes → reason about results without reading terminal (EVASION!)
-- ❌ Command completes → launch another command to "verify" without reading terminal first (EVASION!)
-
-**REQUIRED PATTERN:**
-1. Launch command with echo markers
-2. Wait for terminal ID
-3. Read terminal using `read-terminal` or `read-process`
-4. ONLY AFTER reading terminal, reason about results
-
-**Violation = immediate halt. No exceptions.**
+**Critical Implementation Detail:**
+- For quick commands (< 10 seconds): Use `wait=true`, output is in tool result `<output>` section
+- For long commands (git commit, git push, docker build): Use `wait=false` + `read-process` to avoid timeouts
+- `wait=false` prevents timeouts and provides FULL output via `read-process` with terminal_id
+- NEVER call `read-terminal` (doesn't accept terminal_id parameter)
+- NEVER call additional commands to "check" results (git status, git log) - read the output that's already there
 
 ---
 

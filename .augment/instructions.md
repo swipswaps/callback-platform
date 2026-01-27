@@ -60,6 +60,22 @@ NEVER ignore the output already in the tool result
 NEVER reason without reading the tool result output first
 ```
 
+**CRITICAL: WHEN TO USE wait=true vs wait=false:**
+```
+IF command is expected to complete quickly (< 10 seconds) THEN
+    Use wait=true
+    Output will be in tool result <output> section
+    Read it directly from there
+END IF
+
+IF command might take a long time (git commit, git push, docker build, etc.) THEN
+    Use wait=false
+    Process runs in background
+    MUST use read-process with terminal_id to get output
+    This PREVENTS TIMEOUTS and gives you FULL OUTPUT
+END IF
+```
+
 **BEFORE reasoning about ANY command output:**
 ```
 IF command was launched with wait=true THEN
@@ -76,11 +92,17 @@ IF command was launched with wait=true THEN
     ❌ Command times out → launch "git log" to check
     ✅ Command times out → READ THE TOOL RESULT OUTPUT (already there!) → reason based on evidence
     ✅ Tool result shows "END: git push" → command succeeded even if timeout occurred
+
+    BETTER SOLUTION TO TIMEOUTS:
+    ❌ BAD: wait=true with max_wait_seconds=30 → command times out → no output
+    ✅ GOOD: wait=false → read-process with terminal_id → get FULL output, no timeout
 END IF
 
 IF command was launched with wait=false THEN
     MUST use read-process with terminal_id to get output
     MUST NOT use read-terminal (doesn't accept terminal_id parameter)
+    Process runs in background, you get terminal_id immediately
+    Call read-process to get the output when ready
 END IF
 ```
 
@@ -90,9 +112,13 @@ END IF
 ❌ BAD: git push times out → call read-terminal (WASTES TURN - output already in tool result!)
 ❌ BAD: git push times out → launch "git status" → reason about status (EVASION!)
 ❌ BAD: git push times out → launch "git log" → reason about log (EVASION!)
+❌ BAD: git commit with wait=true, max_wait_seconds=30 → times out → no output available
+
 ✅ GOOD: launch-process with wait=true → tool returns → READ TOOL RESULT OUTPUT → reason
 ✅ GOOD: git push times out → READ TOOL RESULT → see "END: git push" → confirm success
 ✅ GOOD: Tool result shows "Total 4 (delta 2)" in output → command succeeded
+✅ BEST: git commit with wait=false → read-process with terminal_id → get FULL output, no timeout
+✅ BEST: git push with wait=false → read-process with terminal_id → see "END: git push" → confirm success
 ```
 
 ### 🔴 RULE 8 VIOLATION DETECTOR
