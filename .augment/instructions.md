@@ -8,26 +8,33 @@
 
 Before EVERY response, the agent MUST:
 
-1. ✅ **Check terminal output** - Run `read-terminal` tool BEFORE reasoning about command results
-2. ✅ **Use persistent logging** - ALL commands MUST use `echo "START: description" && command 2>&1 | tee /tmp/descriptive_name_$(date +%s).log && echo "END: description"`
+1. ✅ **The output is ALREADY in the tool result** - When using launch-process with wait=true, the output is in the <output> section. DO NOT call read-terminal (wastes turn).
+2. ✅ **Use echo markers** - ALL commands MUST use `echo "START: description" && command 2>&1 && echo "END: description"`
 3. ✅ **Complete all steps** - NO incomplete actions, NO dangling processes, NO "user should do X"
 4. ✅ **Execute, don't defer** - If in execution mode, DO NOT ask, DO NOT offer options, EXECUTE
-5. ✅ **Echo before/after** - REQUIRED: `echo "START: X"` before command, `echo "END: X"` after command
-6. ✅ **Read terminal FIRST** - FORBIDDEN to reason about command results without reading terminal output first
+5. ✅ **Read what's already there** - Tool result <output> section contains the command output. READ IT.
+6. ✅ **STOP LYING about terminals** - Augment's "Terminal ID" is internal tracking, NOT visible to user. User sees bash PID and TTY in their VSCode terminal.
 
 ---
 
 ## HARD STOPS (Immediate Halt Required)
 
-### 🔴 RULE 9 VIOLATION DETECTOR
+### 🔴 RULE 9 VIOLATION DETECTOR - TERMINAL OUTPUT IS ALREADY IN TOOL RESULT
 
-**CRITICAL: NEVER call read-process in same tool block as launch-process**
-**CRITICAL: NEVER reason about command results without reading terminal FIRST**
+**CRITICAL: When using launch-process with wait=true, output is in the <output> section of tool result**
+**CRITICAL: DO NOT call read-terminal after wait=true - the output is ALREADY THERE**
+**CRITICAL: DO NOT lie about "Terminal ID" - that's Augment's internal tracking, user sees bash PID**
 
 **MANDATORY ECHO PATTERN:**
 ```bash
-echo "START: descriptive action" && command 2>&1 | tee /tmp/descriptive_name_$(date +%s).log && echo "END: descriptive action"
+echo "START: descriptive action" && command 2>&1 && echo "END: descriptive action"
 ```
+
+**TRUTH ABOUT TERMINALS:**
+- Augment's "Terminal ID" (e.g., 89488) = Internal tracking number, NOT visible to user
+- User sees in VSCode terminal: bash PID (e.g., 1359892), TTY (e.g., pts/2)
+- When wait=true: Output is in tool result <output> section - READ IT, don't call read-terminal
+- When wait=false: Process runs in background, use read-process with terminal_id to get output later
 
 **CORRECT PATTERN:**
 ```
@@ -90,19 +97,19 @@ END IF
 
 ### 🔴 RULE 8 VIOLATION DETECTOR
 
-**ALL process executions MUST include echo markers AND logging:**
+**ALL process executions MUST include echo markers:**
 ```bash
-echo "START: descriptive action" && command 2>&1 | tee /tmp/descriptive_name_$(date +%s).log && echo "END: descriptive action"
+echo "START: descriptive action" && command 2>&1 && echo "END: descriptive action"
 ```
 
 **Violation Example:**
 ```
 ❌ BAD: git push origin main
-❌ BAD: git push origin main 2>&1 | tee /tmp/git_push_$(date +%s).log  (missing echo markers)
-✅ GOOD: echo "START: git push" && git push origin main 2>&1 | tee /tmp/git_push_$(date +%s).log && echo "END: git push"
+❌ BAD: git push origin main 2>&1  (missing echo markers)
+✅ GOOD: echo "START: git push" && git push origin main 2>&1 && echo "END: git push"
 ```
 
-**Rationale:** Echo markers make it impossible for the LLM to claim "I didn't see the output" because START/END markers are always visible even if command output is truncated.
+**Rationale:** Echo markers prove the command completed. When wait=true, the output (including START/END markers) is in the tool result <output> section. READ IT - don't waste a turn calling read-terminal!
 
 ### 🔴 RULE 15 VIOLATION DETECTOR
 
