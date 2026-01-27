@@ -7,6 +7,73 @@
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
 }
 
+/* Health Section */
+.health-section {
+  margin-bottom: 30px;
+}
+
+.health-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px;
+  margin-top: 20px;
+}
+
+.health-card {
+  background: white;
+  border-radius: 8px;
+  padding: 20px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.health-card h3 {
+  margin-top: 0;
+  color: #333;
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 15px;
+}
+
+.health-metric {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.health-metric:last-child {
+  border-bottom: none;
+}
+
+.health-metric-label {
+  color: #666;
+  font-size: 14px;
+}
+
+.health-metric-value {
+  font-weight: 600;
+  color: #333;
+  font-size: 14px;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.status-healthy {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.status-unhealthy {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
 .admin-header {
   display: flex;
   justify-content: space-between;

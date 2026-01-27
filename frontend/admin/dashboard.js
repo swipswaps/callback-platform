@@ -120,10 +120,98 @@ function showAuthError(message) {
 async function refreshDashboard() {
   await Promise.all([
     loadStats(),
-    loadRequests()
+    loadRequests(),
+    loadHealthData()
   ]);
-  
+
   lastUpdated.textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
+}
+
+async function loadHealthData() {
+  // Load worker health
+  try {
+    const response = await fetch(`${API_BASE_URL}/health/workers`, {
+      headers: { 'Authorization': `Bearer ${apiToken}` }
+    });
+    const data = await response.json();
+
+    let html = '';
+    if (data.workers) {
+      for (const [name, status] of Object.entries(data.workers)) {
+        const healthyClass = status.healthy ? 'status-healthy' : 'status-unhealthy';
+        const healthyText = status.healthy ? 'Healthy' : 'Unhealthy';
+        html += `<div class="health-metric">
+          <span class="health-metric-label">${name}:</span>
+          <span class="status-badge ${healthyClass}">${healthyText}</span>
+        </div>`;
+      }
+    }
+    if (data.twilio_api) {
+      const healthyClass = data.twilio_api.healthy ? 'status-healthy' : 'status-unhealthy';
+      const healthyText = data.twilio_api.healthy ? 'Healthy' : 'Unhealthy';
+      html += `<div class="health-metric">
+        <span class="health-metric-label">Twilio API:</span>
+        <span class="status-badge ${healthyClass}">${healthyText}</span>
+      </div>`;
+    }
+    document.getElementById('workerHealth').innerHTML = html || 'No data';
+  } catch (e) {
+    document.getElementById('workerHealth').innerHTML = 'Error loading';
+  }
+
+  // Load concurrency
+  try {
+    const response = await fetch(`${API_BASE_URL}/health/concurrency`, {
+      headers: { 'Authorization': `Bearer ${apiToken}` }
+    });
+    const data = await response.json();
+
+    const html = `
+      <div class="health-metric">
+        <span class="health-metric-label">Active Calls:</span>
+        <span class="health-metric-value">${data.calls.current} / ${data.calls.limit}</span>
+      </div>
+      <div class="health-metric">
+        <span class="health-metric-label">Active SMS:</span>
+        <span class="health-metric-value">${data.sms.current} / ${data.sms.limit}</span>
+      </div>
+      <div class="health-metric">
+        <span class="health-metric-label">Call Utilization:</span>
+        <span class="health-metric-value">${data.calls.utilization_percent.toFixed(1)}%</span>
+      </div>
+    `;
+    document.getElementById('concurrencyHealth').innerHTML = html;
+  } catch (e) {
+    document.getElementById('concurrencyHealth').innerHTML = 'Error loading';
+  }
+
+  // Load commit mode
+  try {
+    const response = await fetch(`${API_BASE_URL}/health/commit_mode`, {
+      headers: { 'Authorization': `Bearer ${apiToken}` }
+    });
+    const data = await response.json();
+
+    const html = `
+      <div class="health-metric">
+        <span class="health-metric-label">Mode:</span>
+        <span class="health-metric-value">${data.commit_mode}</span>
+      </div>
+      <div class="health-metric">
+        <span class="health-metric-label">Transactional:</span>
+        <span class="status-badge ${data.transactional_integrity ? 'status-healthy' : 'status-unhealthy'}">
+          ${data.transactional_integrity ? 'Yes' : 'No'}
+        </span>
+      </div>
+      <div class="health-metric">
+        <span class="health-metric-label">Description:</span>
+        <span class="health-metric-value" style="font-size: 12px;">${data.current_mode_description}</span>
+      </div>
+    `;
+    document.getElementById('commitModeHealth').innerHTML = html;
+  } catch (e) {
+    document.getElementById('commitModeHealth').innerHTML = 'Error loading';
+  }
 }
 
 async function loadStats() {
@@ -207,26 +295,40 @@ function renderRequestsTable(requests) {
   requestsTableBody.innerHTML = '';
 
   if (requests.length === 0) {
-    requestsTableBody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: #6b7280;">No requests found</td></tr>';
+    requestsTableBody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: #6b7280;">No requests found</td></tr>';
     return;
   }
 
   requests.forEach(req => {
     const row = document.createElement('tr');
 
+    // Format retry info
+    const retryInfo = req.retry_count > 0
+      ? `${req.retry_count}/${req.max_retries}`
+      : '-';
+
+    // Format escalation info
+    const escalationInfo = req.escalation_level > 0
+      ? `L${req.escalation_level}`
+      : '-';
+
+    // Retry button for failed requests
+    const retryButton = req.request_status === 'failed'
+      ? `<button class="btn btn-sm btn-primary" onclick="retryRequest('${req.request_id}')">🔄 Retry</button>`
+      : '';
+
     row.innerHTML = `
       <td><span class="request-id">${req.request_id.substring(0, 8)}...</span></td>
       <td>${req.visitor_name || '-'}</td>
       <td><span class="phone-number">${req.visitor_phone}</span></td>
       <td><span class="status-badge status-${req.request_status}">${req.request_status}</span></td>
-      <td><span class="timestamp">${formatTimestamp(req.created_at)}</span></td>
+      <td><span class="priority-badge">${req.priority || 'default'}</span></td>
+      <td>${retryInfo}</td>
+      <td>${escalationInfo}</td>
       <td><span class="timestamp">${formatTimestamp(req.updated_at)}</span></td>
       <td>
         <div class="action-buttons">
-          ${req.request_status === 'failed' || req.request_status === 'cancelled' ?
-            `<button class="btn btn-success" onclick="retryRequest('${req.request_id}')">🔄 Retry</button>` : ''}
-          ${req.request_status === 'pending' || req.request_status === 'verified' ?
-            `<button class="btn btn-danger" onclick="cancelRequest('${req.request_id}')">❌ Cancel</button>` : ''}
+          ${retryButton}
         </div>
       </td>
     `;
