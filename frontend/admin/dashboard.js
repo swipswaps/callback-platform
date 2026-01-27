@@ -376,7 +376,7 @@ function renderRequestsTable(requests) {
   requestsTableBody.innerHTML = '';
 
   if (requests.length === 0) {
-    requestsTableBody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: #6b7280;">No requests found</td></tr>';
+    requestsTableBody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: #6b7280;">No requests found</td></tr>';
     return;
   }
 
