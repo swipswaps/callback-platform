@@ -109,13 +109,38 @@
 
       <!-- Requests Table -->
       <section class="requests-section">
-        <h2>📋 Callback Requests</h2>
+        <div class="section-header">
+          <h2>📋 Callback Requests</h2>
+          <div class="section-actions">
+            <button id="exportCsvBtn" class="btn btn-secondary" title="Export filtered requests to CSV">
+              📊 Export CSV
+            </button>
+            <button id="bulkActionsBtn" class="btn btn-secondary" style="display: none;" title="Perform bulk actions">
+              ☑️ Bulk Actions
+            </button>
+          </div>
+        </div>
         <div id="requestsLoading" class="loading">Loading...</div>
         <div id="requestsError" class="error-message" style="display: none;"></div>
         <div id="requestsTableContainer" style="display: none;">
+          <!-- Bulk Actions Bar -->
+          <div id="bulkActionsBar" class="bulk-actions-bar" style="display: none;">
+            <div class="bulk-actions-info">
+              <span id="selectedCount">0</span> selected
+            </div>
+            <div class="bulk-actions-buttons">
+              <button id="bulkRetryBtn" class="btn btn-sm btn-primary">🔄 Retry Selected</button>
+              <button id="bulkCancelBtn" class="btn btn-sm btn-warning">❌ Cancel Selected</button>
+              <button id="deselectAllBtn" class="btn btn-sm btn-secondary">Clear Selection</button>
+            </div>
+          </div>
+
           <table class="requests-table">
             <thead>
               <tr>
+                <th style="width: 40px;">
+                  <input type="checkbox" id="selectAllCheckbox" title="Select all on this page">
+                </th>
                 <th>Request ID</th>
                 <th>Name</th>
                 <th>Phone</th>

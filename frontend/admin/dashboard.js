@@ -89,6 +89,17 @@ const requestsTableBody = document.getElementById('requestsTableBody');
 const prevPageBtn = document.getElementById('prevPageBtn');
 const nextPageBtn = document.getElementById('nextPageBtn');
 const paginationInfo = document.getElementById('paginationInfo');
+const exportCsvBtn = document.getElementById('exportCsvBtn');
+const bulkActionsBtn = document.getElementById('bulkActionsBtn');
+const selectAllCheckbox = document.getElementById('selectAllCheckbox');
+const bulkActionsBar = document.getElementById('bulkActionsBar');
+const selectedCountSpan = document.getElementById('selectedCount');
+const bulkRetryBtn = document.getElementById('bulkRetryBtn');
+const bulkCancelBtn = document.getElementById('bulkCancelBtn');
+const deselectAllBtn = document.getElementById('deselectAllBtn');
+
+// Bulk selection state
+let selectedRequests = new Set();
 
 // Event Listeners
 loginBtn.addEventListener('click', handleLogin);
@@ -131,6 +142,13 @@ applyFiltersBtn.addEventListener('click', applyFilters);
 clearFiltersBtn.addEventListener('click', clearFilters);
 prevPageBtn.addEventListener('click', () => changePage(-1));
 nextPageBtn.addEventListener('click', () => changePage(1));
+exportCsvBtn.addEventListener('click', exportToCSV);
+
+// Bulk actions event listeners
+selectAllCheckbox.addEventListener('change', toggleSelectAll);
+bulkRetryBtn.addEventListener('click', bulkRetry);
+bulkCancelBtn.addEventListener('click', bulkCancel);
+deselectAllBtn.addEventListener('click', clearSelection);
 
 // Keyboard Shortcuts
 document.addEventListener('keydown', (e) => {
@@ -381,7 +399,16 @@ function renderRequestsTable(requests) {
     // Always show view details button
     actionButtons += `<button class="btn btn-sm btn-secondary" onclick="viewDetails('${req.request_id}')">👁️ View</button>`;
 
+    const isSelected = selectedRequests.has(req.request_id);
+
     row.innerHTML = `
+      <td>
+        <input type="checkbox"
+               class="row-checkbox"
+               data-request-id="${req.request_id}"
+               ${isSelected ? 'checked' : ''}
+               onchange="toggleRowSelection('${req.request_id}', this.checked)">
+      </td>
       <td>
         <span class="request-id copyable"
               onclick="copyToClipboard('${req.request_id}', 'Request ID copied!')"
@@ -408,6 +435,8 @@ function renderRequestsTable(requests) {
 
     requestsTableBody.appendChild(row);
   });
+
+  updateBulkActionsBar();
 }
 
 function formatTimestamp(isoString) {
@@ -556,6 +585,244 @@ function closeShortcutsModal() {
 // Make modal functions global
 window.showShortcutsModal = showShortcutsModal;
 window.closeShortcutsModal = closeShortcutsModal;
+
+// Export to CSV
+async function exportToCSV() {
+  try {
+    // Fetch all requests with current filters (no pagination limit)
+    const params = new URLSearchParams({
+      limit: 10000, // Get all matching records
+      offset: 0,
+      order: 'desc'
+    });
+
+    if (currentFilters.status) {
+      params.append('status', currentFilters.status);
+    }
+
+    if (currentFilters.phone) {
+      params.append('phone', currentFilters.phone);
+    }
+
+    showToast('Preparing CSV export...', 'info', 2000);
+
+    const response = await fetch(`${API_BASE_URL}/admin/api/requests?${params}`, {
+      headers: {
+        'Authorization': `Bearer ${apiToken}`
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to fetch requests for export');
+    }
+
+    const data = await response.json();
+    const requests = data.requests;
+
+    if (requests.length === 0) {
+      showToast('No requests to export', 'warning');
+      return;
+    }
+
+    // Create CSV content
+    const headers = ['Request ID', 'Name', 'Phone', 'Email', 'Status', 'Created', 'Updated', 'Call SID', 'SMS SID', 'IP Address'];
+    const csvRows = [headers.join(',')];
+
+    requests.forEach(req => {
+      const row = [
+        req.request_id,
+        req.visitor_name || '',
+        req.visitor_phone,
+        req.visitor_email || '',
+        req.request_status,
+        req.created_at,
+        req.updated_at,
+        req.call_sid || '',
+        req.sms_sid || '',
+        req.ip_address || ''
+      ];
+      // Escape commas and quotes in CSV
+      const escapedRow = row.map(field => {
+        const str = String(field);
+        if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+          return `"${str.replace(/"/g, '""')}"`;
+        }
+        return str;
+      });
+      csvRows.push(escapedRow.join(','));
+    });
+
+    const csvContent = csvRows.join('\n');
+
+    // Create download link
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+
+    // Generate filename with timestamp and filter info
+    const timestamp = new Date().toISOString().split('T')[0];
+    const filterSuffix = currentFilters.status ? `_${currentFilters.status}` : '';
+    link.download = `callback_requests${filterSuffix}_${timestamp}.csv`;
+
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    showToast(`Exported ${requests.length} requests to CSV`, 'success');
+
+  } catch (error) {
+    console.error('Export failed:', error);
+    showToast('Failed to export CSV: ' + error.message, 'error');
+  }
+}
+
+// Bulk Actions Functions
+function toggleRowSelection(requestId, isChecked) {
+  if (isChecked) {
+    selectedRequests.add(requestId);
+  } else {
+    selectedRequests.delete(requestId);
+  }
+  updateBulkActionsBar();
+}
+
+function toggleSelectAll() {
+  const checkboxes = document.querySelectorAll('.row-checkbox');
+  checkboxes.forEach(cb => {
+    const requestId = cb.dataset.requestId;
+    if (selectAllCheckbox.checked) {
+      selectedRequests.add(requestId);
+      cb.checked = true;
+    } else {
+      selectedRequests.delete(requestId);
+      cb.checked = false;
+    }
+  });
+  updateBulkActionsBar();
+}
+
+function clearSelection() {
+  selectedRequests.clear();
+  document.querySelectorAll('.row-checkbox').forEach(cb => cb.checked = false);
+  selectAllCheckbox.checked = false;
+  updateBulkActionsBar();
+}
+
+function updateBulkActionsBar() {
+  const count = selectedRequests.size;
+  selectedCountSpan.textContent = count;
+
+  if (count > 0) {
+    bulkActionsBar.style.display = 'flex';
+  } else {
+    bulkActionsBar.style.display = 'none';
+  }
+
+  // Update select all checkbox state
+  const checkboxes = document.querySelectorAll('.row-checkbox');
+  const allChecked = checkboxes.length > 0 && Array.from(checkboxes).every(cb => cb.checked);
+  selectAllCheckbox.checked = allChecked;
+}
+
+async function bulkRetry() {
+  if (selectedRequests.size === 0) {
+    showToast('No requests selected', 'warning');
+    return;
+  }
+
+  if (!confirm(`Are you sure you want to retry ${selectedRequests.size} requests?`)) {
+    return;
+  }
+
+  const requestIds = Array.from(selectedRequests);
+  let successCount = 0;
+  let failCount = 0;
+
+  showToast(`Retrying ${requestIds.length} requests...`, 'info', 3000);
+
+  for (const requestId of requestIds) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/admin/api/retry/${requestId}`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiToken}`
+        }
+      });
+
+      if (response.ok) {
+        successCount++;
+      } else {
+        failCount++;
+      }
+    } catch (error) {
+      console.error(`Failed to retry ${requestId}:`, error);
+      failCount++;
+    }
+  }
+
+  clearSelection();
+  await Promise.all([loadStats(), loadRequests()]);
+
+  if (failCount === 0) {
+    showToast(`✅ Successfully retried ${successCount} requests`, 'success');
+  } else {
+    showToast(`⚠️ Retried ${successCount} requests, ${failCount} failed`, 'warning');
+  }
+}
+
+async function bulkCancel() {
+  if (selectedRequests.size === 0) {
+    showToast('No requests selected', 'warning');
+    return;
+  }
+
+  if (!confirm(`Are you sure you want to cancel ${selectedRequests.size} requests?`)) {
+    return;
+  }
+
+  const requestIds = Array.from(selectedRequests);
+  let successCount = 0;
+  let failCount = 0;
+
+  showToast(`Cancelling ${requestIds.length} requests...`, 'info', 3000);
+
+  for (const requestId of requestIds) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/cancel_request`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ request_id: requestId })
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        successCount++;
+      } else {
+        failCount++;
+      }
+    } catch (error) {
+      console.error(`Failed to cancel ${requestId}:`, error);
+      failCount++;
+    }
+  }
+
+  clearSelection();
+  await Promise.all([loadStats(), loadRequests()]);
+
+  if (failCount === 0) {
+    showToast(`✅ Successfully cancelled ${successCount} requests`, 'success');
+  } else {
+    showToast(`⚠️ Cancelled ${successCount} requests, ${failCount} failed`, 'warning');
+  }
+}
+
+// Make bulk functions global
+window.toggleRowSelection = toggleRowSelection;
 
 
 
