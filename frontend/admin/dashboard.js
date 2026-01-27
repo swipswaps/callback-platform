@@ -49,6 +49,21 @@ loginBtn.addEventListener('click', handleLogin);
 apiTokenInput.addEventListener('keypress', (e) => {
   if (e.key === 'Enter') handleLogin();
 });
+
+// Auto-login when token is pasted or entered
+apiTokenInput.addEventListener('input', async (e) => {
+  const token = e.target.value.trim();
+  // Auto-login if token looks valid (at least 20 chars, typical for API tokens)
+  if (token.length >= 20) {
+    // Small delay to allow user to finish pasting
+    setTimeout(() => {
+      if (apiTokenInput.value.trim() === token) {
+        handleLogin();
+      }
+    }, 500);
+  }
+});
+
 refreshBtn.addEventListener('click', refreshDashboard);
 applyFiltersBtn.addEventListener('click', applyFilters);
 clearFiltersBtn.addEventListener('click', clearFilters);
@@ -418,30 +433,5 @@ async function retryRequest(requestId) {
   }
 }
 
-async function cancelRequest(requestId) {
-  if (!confirm('Are you sure you want to cancel this callback request?')) {
-    return;
-  }
 
-  try {
-    const response = await fetch(`${API_BASE_URL}/cancel_request`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ request_id: requestId })
-    });
-
-    const data = await response.json();
-
-    if (response.ok) {
-      alert('Request cancelled successfully!');
-      await refreshDashboard();
-    } else {
-      alert('Failed to cancel: ' + (data.error || 'Unknown error'));
-    }
-  } catch (error) {
-    alert('Failed to cancel: ' + error.message);
-  }
-}
 
