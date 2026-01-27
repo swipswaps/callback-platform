@@ -318,6 +318,118 @@ FRONTEND_URL=https://contact.yourdomain.com
 
 ## 📖 Detailed User Guide
 
+### For Admin Users
+
+The admin dashboard provides comprehensive management and monitoring of all callback requests.
+
+**Access**: `https://contact.yourdomain.com/admin/dashboard.html`
+
+#### Getting Started
+
+1. **Login with API Token**:
+   - Enter your API token (configured in backend `.env` as `ADMIN_API_TOKEN`)
+   - Token is stored in browser session for convenience
+   - Auto-login when pasting token (20+ characters)
+
+2. **Dashboard Overview**:
+   - Real-time statistics (total requests, success rate, 24h activity)
+   - Clickable stat cards to filter by status
+   - Live updates without page refresh
+   - Version detection (shows when newer build exists on GitHub)
+
+#### Key Features
+
+**📊 Statistics Cards** (Clickable):
+- **Total Requests**: Click to show all requests
+- **Success Rate**: Shows % of successful callbacks (informational)
+- **Last 24h**: Recent activity count (informational)
+- **⏳ Pending**: Click to show pending requests (TAKE ACTION)
+- **✅ Completed**: Click to show successful callbacks
+- **❌ Failed**: Click to show failed requests (NEEDS RETRY)
+
+**🔍 Filtering**:
+- Filter by status (pending, verified, calling, connected, completed, failed, cancelled)
+- Search by phone number
+- Limit results (10, 25, 50, 100, 500 per page)
+- Clear all filters with one click or press `Escape`
+
+**📋 Request Management**:
+- **View Details**: Click any request ID or phone number to see full details
+- **Copy to Clipboard**: Click request ID or phone number to copy
+- **Retry Failed Requests**: One-click retry for failed callbacks
+- **Cancel Pending Requests**: Cancel requests that haven't been processed yet
+- **Live Updates**: Actions update data without page refresh
+
+**☑️ Bulk Actions**:
+- Select multiple requests using checkboxes
+- **Select All**: Checkbox in table header
+- **Bulk Retry**: Retry multiple failed requests at once
+- **Bulk Cancel**: Cancel multiple pending requests at once
+- Progress feedback via toast notifications
+
+**📊 Export to CSV**:
+- Export filtered requests to CSV file
+- Fetches up to 10,000 matching records
+- Proper CSV escaping (commas, quotes, newlines)
+- Filename includes timestamp and filter suffix
+- Example: `callback_requests_failed_2024-01-27.csv`
+
+**⌨️ Keyboard Shortcuts**:
+- `Ctrl/Cmd + R`: Refresh dashboard
+- `Ctrl/Cmd + K`: Focus search filter
+- `Escape`: Clear all filters
+- `?`: Show keyboard shortcuts help
+
+**🔔 Toast Notifications**:
+- Non-blocking, auto-dismiss notifications
+- Color-coded: success (green), error (red), info (blue)
+- Smooth slide-in animation
+- No more blocking alert() dialogs
+
+**🔄 Version Detection**:
+- Automatic check on page load (no polling)
+- Shows banner if newer build exists on GitHub
+- Informational only (no claims about CDN propagation)
+- Refresh or dismiss banner
+
+#### Common Admin Tasks
+
+**Monitor Pending Requests**:
+1. Click "⏳ Pending" stat card
+2. Review requests waiting for action
+3. Cancel if needed or wait for automatic processing
+
+**Retry Failed Callbacks**:
+1. Click "❌ Failed" stat card
+2. Review failure reasons in status message
+3. Click "🔄 Retry" button for individual requests
+4. Or select multiple and use "Bulk Retry"
+
+**Export Data for Analysis**:
+1. Apply filters (e.g., status=completed, last 24h)
+2. Click "📊 Export CSV" button
+3. Open in Excel/Google Sheets for analysis
+
+**Search for Specific Customer**:
+1. Enter phone number in search filter
+2. Click "Apply Filters"
+3. View all requests from that customer
+
+**Bulk Operations**:
+1. Select requests using checkboxes
+2. Bulk actions bar appears automatically
+3. Choose "Bulk Retry" or "Bulk Cancel"
+4. Confirm action
+5. Watch progress via toast notifications
+
+#### Security Notes
+
+- API token required for all operations
+- Token transmitted via `Authorization: Bearer` header
+- Session expires when browser closes
+- No sensitive data stored in localStorage
+- All actions logged in backend audit log
+
 ### For Business Owners
 
 #### How to Receive Callbacks
