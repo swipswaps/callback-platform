@@ -214,6 +214,9 @@ async function loadRequests() {
 
     const data = await response.json();
 
+    // Store requests data globally for viewDetails function
+    window.currentRequestsData = data.requests;
+
     // Render requests table
     renderRequestsTable(data.requests);
 
@@ -242,26 +245,31 @@ function renderRequestsTable(requests) {
   requests.forEach(req => {
     const row = document.createElement('tr');
 
-    // Only show retry button for failed requests
-    const retryButton = (req.request_status === 'failed' || req.request_status === 'Failed')
-      ? `<button class="btn btn-sm btn-primary" onclick="retryRequest('${req.request_id}')">🔄 Retry</button>`
-      : '';
+    const status = req.request_status.toLowerCase();
 
-    // Only show cancel button for pending requests
-    const cancelButton = (req.request_status === 'pending' || req.request_status === 'Pending')
-      ? `<button class="btn btn-sm btn-warning" onclick="cancelRequest('${req.request_id}')">❌ Cancel</button>`
-      : '';
+    // Build action buttons based on status
+    let actionButtons = '';
+
+    if (status === 'failed') {
+      actionButtons += `<button class="btn btn-sm btn-primary" onclick="retryRequest('${req.request_id}')">🔄 Retry</button> `;
+    }
+
+    if (status === 'pending' || status === 'verified') {
+      actionButtons += `<button class="btn btn-sm btn-warning" onclick="cancelRequest('${req.request_id}')">❌ Cancel</button> `;
+    }
+
+    // Always show view details button
+    actionButtons += `<button class="btn btn-sm btn-secondary" onclick="viewDetails('${req.request_id}')">👁️ View</button>`;
 
     row.innerHTML = `
       <td><span class="request-id">${req.request_id.substring(0, 8)}...</span></td>
       <td>${req.visitor_name || '-'}</td>
       <td><span class="phone-number">${req.visitor_phone}</span></td>
-      <td><span class="status-badge status-${req.request_status.toLowerCase()}">${formatStatusText(req.request_status)}</span></td>
+      <td><span class="status-badge status-${status}">${formatStatusText(req.request_status)}</span></td>
       <td><span class="timestamp">${formatTimestamp(req.updated_at)}</span></td>
       <td>
         <div class="action-buttons">
-          ${retryButton}
-          ${cancelButton}
+          ${actionButtons}
         </div>
       </td>
     `;
@@ -329,6 +337,32 @@ function changePage(direction) {
   if (currentOffset < 0) currentOffset = 0;
 
   loadRequests();
+}
+
+function viewDetails(requestId) {
+  // Find the request in the current data
+  const req = window.currentRequestsData?.find(r => r.request_id === requestId);
+
+  if (!req) {
+    alert('Request details not found');
+    return;
+  }
+
+  const details = `
+Request ID: ${req.request_id}
+Name: ${req.visitor_name || 'N/A'}
+Email: ${req.visitor_email || 'N/A'}
+Phone: ${req.visitor_phone}
+Status: ${req.request_status}
+Message: ${req.status_message || 'N/A'}
+Created: ${formatTimestamp(req.created_at)}
+Updated: ${formatTimestamp(req.updated_at)}
+Call SID: ${req.call_sid || 'N/A'}
+SMS SID: ${req.sms_sid || 'N/A'}
+IP Address: ${req.ip_address || 'N/A'}
+  `.trim();
+
+  alert(details);
 }
 
 async function retryRequest(requestId) {
