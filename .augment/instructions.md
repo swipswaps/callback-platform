@@ -16,9 +16,10 @@ Before EVERY response, the agent MUST:
 6. ✅ **Execute immediately** - DO NOT ask, DO NOT plan, EXECUTE NOW
 7. ✅ **THE ONLY PATTERN (MANDATORY):**
    ```
-   launch-process with wait=true, max_wait_seconds=3
-   Output is in <output> section of tool result - READ IT
-   NO read-process, NO read-terminal, NO tee
+   AI runs: launch-process with wait=true, max_wait_seconds=3
+   AI reads: <output> section of tool result
+   FORBIDDEN: read-process, list-processes, asking user to run commands
+   EXCEPTION: read-terminal for user's spontaneous terminal activity
    ```
 
 ---
@@ -48,21 +49,25 @@ Tool returns output in <output> section - READ IT
 
 **FORBIDDEN PATTERNS:**
 ❌ Using wait=false (creates hidden terminals user can't see)
-❌ Calling read-process (output already in tool result)
-❌ Calling read-terminal (output already in tool result)
+❌ Calling read-process (AI-only hidden tool - user can't see output)
+❌ Calling list-processes (AI-only hidden tool - user can't see output)
+❌ Asking user to run commands (increases error chance)
 ❌ Using tee (not needed)
 ❌ Calling git status/log to check results (output already there)
-✅ CORRECT: wait=true, max_wait_seconds=3, read <output> section
+✅ CORRECT: AI runs command with wait=true, max_wait_seconds=3, reads <output> section
+✅ CORRECT: read-terminal only for reading user's spontaneous terminal activity
 
 **Violation Example:**
 ```
 ❌ BAD: Using wait=false (creates hidden terminals)
-❌ BAD: Calling read-process after wait=true (output already in tool result)
-❌ BAD: Calling read-terminal (output already in tool result)
+❌ BAD: Calling read-process (AI-only hidden tool)
+❌ BAD: Calling list-processes (AI-only hidden tool)
+❌ BAD: Asking user to run commands (increases error chance)
 ❌ BAD: Calling git status to check results (output already in tool result)
 
-✅ CORRECT: launch-process with wait=true, max_wait_seconds=3
-✅ CORRECT: Read output from <output> section in tool result
+✅ CORRECT: AI runs launch-process with wait=true, max_wait_seconds=3
+✅ CORRECT: AI reads output from <output> section in tool result
+✅ CORRECT: read-terminal only for user's spontaneous terminal activity
 ✅ CORRECT: git commit with wait=true → read <output> section → see "END: git commit"
 ✅ CORRECT: git push with wait=true → read <output> section → see "END: git push"
 ✅ CORRECT: docker build with wait=true → read <output> section → see build logs

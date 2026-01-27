@@ -97,14 +97,16 @@ launch-process:
 ```
 
 **For ALL commands:**
-- ALWAYS use `wait=true`
+- AI ALWAYS runs commands using `wait=true`
 - ALWAYS use `max_wait_seconds=3`
 - Output is in tool result <output> section - READ IT
 - NEVER use `wait=false` - creates hidden background terminals
-- NEVER call read-process - output already in tool result
-- NEVER call read-terminal - output already in tool result
+- NEVER call read-process - AI-only hidden tool (user can't see output)
+- NEVER call list-processes - AI-only hidden tool (user can't see output)
+- NEVER ask user to run commands - increases error chance
+- EXCEPTION: read-terminal for user's spontaneous terminal activity
 
-**Rationale:** wait=true runs in user's visible terminal (proven by ps -p $$ showing same PID/TTY). Output is in tool result <output> section.
+**Rationale:** AI runs commands with wait=true in user's visible terminal. Output is in tool result <output> section. Asking user to run commands exponentially increases error chance.
 
 ---
 
@@ -112,33 +114,30 @@ launch-process:
 
 Logs must be reviewed before reasoning or fixes.
 
-**PROVEN FACT: launch-process with wait=true runs in user's visible terminal**
-
-Evidence: ps -p $$ output shows same PID/TTY as user's terminal
+**TRUTH: launch-process with wait=true writes to user's VISIBLE terminal**
 
 **THE ONLY PATTERN:**
 
-```
-launch-process:
-  command: echo "START: action" && command 2>&1 && echo "END: action"
-  wait: true
-  max_wait_seconds: 3
-  cwd: /home/owner/Documents/696d62a9-9c68-832a-b5af-a90eb5243316
+Call `launch-process` with `wait=true` → output in tool result <output> section
 
-Output is in tool result <output> section - READ IT
-```
+**THAT'S IT. ONE STEP.**
 
-**CRITICAL:**
-- ALWAYS use `wait=true` and `max_wait_seconds=3`
-- Output is in tool result <output> section - READ IT
-- NEVER use `wait=false` - creates hidden background terminals
-- NEVER call `read-process` - output already in tool result
-- NEVER call `read-terminal` - output already in tool result
-- NEVER call git status/log to check results - output already there
+**CRITICAL: Use wait=true**
 
-**If command times out at 3 seconds:**
-- Partial output is in tool result <output> section - READ IT
-- Don't call additional commands to check results
+- AI ALWAYS runs commands using `wait=true` for launch-process
+- Output appears in user's VISIBLE terminal (they can see it)
+- Output is ALSO in tool result <output> section - READ IT
+- NEVER use `wait=false` - creates HIDDEN terminals user can't see
+- NEVER call `read-process` - AI-only hidden tool (user can't see output)
+- NEVER call `list-processes` - AI-only hidden tool (user can't see output)
+- NEVER ask user to run commands - exponentially increases error chance
+- EXCEPTION: `read-terminal` for user's spontaneous terminal activity
+- NEVER use tee - not needed, output already visible
+- Set max_wait_seconds high enough (600 = 10 minutes for long commands)
+
+**If command times out:**
+- Partial output is still in tool result <output> section
+- READ IT - don't call additional commands to check results
 
 ---
 
