@@ -56,23 +56,17 @@ Tool returns output in <output> section - READ IT
 
 **Violation Example:**
 ```
-❌ BAD: launch-process with wait=false, then NEVER calling read-process (STALLING)
-❌ BAD: launch-process + read-process in same tool block (must be separate calls)
-❌ BAD: ANY command with wait=true
-❌ BAD: Calling read-terminal
-❌ BAD: Calling git status to check results
+❌ BAD: Using wait=false (creates hidden terminals)
+❌ BAD: Calling read-process after wait=true (output already in tool result)
+❌ BAD: Calling read-terminal (output already in tool result)
+❌ BAD: Calling git status to check results (output already in tool result)
 
-✅ CORRECT PATTERN (2 separate tool calls):
-   Tool Call 1: launch-process with wait=false → get terminal_id
-   Tool Call 2: read-process with terminal_id → get output
-
-✅ CORRECT: git commit with wait=false → THEN read-process → see "END: git commit"
-✅ CORRECT: git push with wait=false → THEN read-process → see "END: git push"
-✅ CORRECT: docker build with wait=false → THEN read-process → see build logs
-✅ CORRECT: ls -la with wait=false → THEN read-process → see file list
-
-⚠️ CRITICAL: You MUST call read-process after EVERY launch-process.
-             Launching without reading = STALLING = FAILURE
+✅ CORRECT: launch-process with wait=true, max_wait_seconds=3
+✅ CORRECT: Read output from <output> section in tool result
+✅ CORRECT: git commit with wait=true → read <output> section → see "END: git commit"
+✅ CORRECT: git push with wait=true → read <output> section → see "END: git push"
+✅ CORRECT: docker build with wait=true → read <output> section → see build logs
+✅ CORRECT: ls -la with wait=true → read <output> section → see file list
 ```
 
 ### 🔴 RULE 8 VIOLATION DETECTOR
@@ -82,24 +76,24 @@ Tool returns output in <output> section - READ IT
 echo "START: descriptive action" && command 2>&1 && echo "END: descriptive action"
 ```
 
-**ALWAYS use wait=false:**
+**ALWAYS use wait=true:**
 ```bash
-# Launch with wait=false (ALWAYS)
-launch-process: echo "START: git push" && git push origin main 2>&1 && echo "END: git push"
-wait=false
+launch-process:
+  command: echo "START: git push" && git push origin main 2>&1 && echo "END: git push"
+  wait: true
+  max_wait_seconds: 3
 
-# Then read output (ALSO with wait=false to avoid timeout stalls)
-read-process: terminal_id=<from above>, wait=false, max_wait_seconds=5
+Output is in <output> section - READ IT
 ```
 
 **Violation Example:**
 ```
 ❌ BAD: git push origin main (missing echo markers)
-❌ BAD: ANY command with wait=true
-✅ CORRECT: ALL commands with wait=false → read-process → see echo markers
+❌ BAD: Using wait=false (creates hidden terminals)
+✅ CORRECT: ALL commands with wait=true, max_wait_seconds=3, read <output> section
 ```
 
-**Rationale:** Echo markers prove the command completed. ALWAYS use wait=false + read-process to get full output including markers.
+**Rationale:** Echo markers prove the command completed. wait=true runs in user's visible terminal and returns output in <output> section.
 
 ### 🔴 RULE 15 VIOLATION DETECTOR
 
@@ -115,7 +109,7 @@ END IF
 **Violation Example:**
 ```
 ❌ BAD: "I started the git push, you should check if it completed"
-✅ CORRECT: Launches git push with wait=false → read-process with terminal_id → confirms success → reports completion
+✅ CORRECT: Launches git push with wait=true → reads <output> section → confirms success → reports completion
 ```
 
 ### 🔴 RULE 4 VIOLATION DETECTOR
@@ -140,9 +134,9 @@ END IF
 **AFTER editing backend/app.py OR .env:**
 ```
 IF file in [backend/app.py, .env, docker-compose.yml] was modified THEN
-    MUST run with wait=false:
+    MUST run with wait=true, max_wait_seconds=10:
       echo "START: docker rebuild" && docker compose down && docker compose up -d --build backend 2>&1 && echo "END: docker rebuild"
-    MUST use read-process with terminal_id to get output
+    MUST read output from <output> section
     MUST verify container started successfully (check for "END: docker rebuild")
     MUST NOT emit response until rebuild confirmed
 END IF
