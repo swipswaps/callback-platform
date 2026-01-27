@@ -1931,6 +1931,40 @@ def health_check():
     })
 
 
+@app.route("/stats", methods=["GET"])
+def public_stats():
+    """
+    Public statistics endpoint (no authentication required).
+    Returns basic stats about the system.
+    """
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+
+        # Get total requests
+        cursor.execute("SELECT COUNT(*) FROM callbacks")
+        total_requests = cursor.fetchone()[0]
+
+        # Get requests by status
+        cursor.execute("SELECT request_status, COUNT(*) FROM callbacks GROUP BY request_status")
+        by_status = {row[0]: row[1] for row in cursor.fetchall()}
+
+        conn.close()
+
+        return jsonify({
+            "success": True,
+            "total_requests": total_requests,
+            "by_status": by_status,
+            "timestamp": datetime.utcnow().isoformat()
+        })
+    except Exception as e:
+        logger.error(f"Error fetching public stats: {e}")
+        return jsonify({
+            "success": False,
+            "error": "Failed to fetch stats"
+        }), 500
+
+
 @app.route("/health/workers", methods=["GET"])
 def worker_health_endpoint():
     """
@@ -1941,9 +1975,9 @@ def worker_health_endpoint():
         JSON with worker health status and Twilio API health
     """
     # Check admin authentication
-    auth_result = check_admin_auth()
-    if auth_result:
-        return auth_result
+    is_valid, error_response = check_admin_auth()
+    if not is_valid:
+        return error_response
 
     # Get worker health status
     health_report = check_worker_health()
@@ -1970,9 +2004,9 @@ def concurrency_health_endpoint():
         JSON with current concurrency levels and limits
     """
     # Check admin authentication
-    auth_result = check_admin_auth()
-    if auth_result:
-        return auth_result
+    is_valid, error_response = check_admin_auth()
+    if not is_valid:
+        return error_response
 
     # Get current concurrency counts
     concurrent_calls = get_concurrent_calls_count()
@@ -2006,9 +2040,9 @@ def commit_mode_health_endpoint():
         JSON with commit mode configuration and transaction counts
     """
     # Check admin authentication
-    auth_result = check_admin_auth()
-    if auth_result:
-        return auth_result
+    is_valid, error_response = check_admin_auth()
+    if not is_valid:
+        return error_response
 
     # Get transaction counts from Prometheus metrics
     # Note: We can't easily read Counter values, so we'll just show configuration
