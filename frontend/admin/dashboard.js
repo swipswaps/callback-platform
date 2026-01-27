@@ -295,22 +295,40 @@ function renderRequestsTable(requests) {
   requestsTableBody.innerHTML = '';
 
   if (requests.length === 0) {
-    requestsTableBody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: #6b7280;">No requests found</td></tr>';
+    requestsTableBody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: #6b7280;">No requests found</td></tr>';
     return;
   }
 
   requests.forEach(req => {
     const row = document.createElement('tr');
 
-    // Format retry info
-    const retryInfo = req.retry_count > 0
-      ? `${req.retry_count}/${req.max_retries}`
-      : '-';
+    // Format retry info with better UX
+    let retryInfo = '';
+    if (req.retry_count > 0 || req.max_retries > 0) {
+      const count = req.retry_count || 0;
+      const max = req.max_retries || 3;
+      retryInfo = `<span class="retry-badge">${count}/${max}</span>`;
+      if (req.retry_at) {
+        retryInfo += `<br><small style="color: #6b7280;">Next: ${formatTimestamp(req.retry_at)}</small>`;
+      }
+    } else {
+      retryInfo = '<span style="color: #9ca3af;">N/A</span>';
+    }
 
-    // Format escalation info
+    // Format escalation info with better UX
     const escalationInfo = req.escalation_level > 0
-      ? `L${req.escalation_level}`
-      : '-';
+      ? `<span class="escalation-badge">L${req.escalation_level}</span>`
+      : '<span style="color: #9ca3af;">None</span>';
+
+    // Format priority with color coding
+    let priorityBadge = '';
+    if (req.priority === 'urgent') {
+      priorityBadge = '<span class="priority-badge priority-urgent">🔴 Urgent</span>';
+    } else if (req.priority === 'high') {
+      priorityBadge = '<span class="priority-badge priority-high">🟡 High</span>';
+    } else {
+      priorityBadge = '<span class="priority-badge priority-default">⚪ Normal</span>';
+    }
 
     // Retry button for failed requests
     const retryButton = req.request_status === 'failed'
@@ -321,8 +339,8 @@ function renderRequestsTable(requests) {
       <td><span class="request-id">${req.request_id.substring(0, 8)}...</span></td>
       <td>${req.visitor_name || '-'}</td>
       <td><span class="phone-number">${req.visitor_phone}</span></td>
-      <td><span class="status-badge status-${req.request_status}">${req.request_status}</span></td>
-      <td><span class="priority-badge">${req.priority || 'default'}</span></td>
+      <td><span class="status-badge status-${req.request_status}">${formatStatusText(req.request_status)}</span></td>
+      <td>${priorityBadge}</td>
       <td>${retryInfo}</td>
       <td>${escalationInfo}</td>
       <td><span class="timestamp">${formatTimestamp(req.updated_at)}</span></td>
@@ -345,6 +363,20 @@ function formatTimestamp(isoString) {
     hour: '2-digit',
     minute: '2-digit'
   });
+}
+
+function formatStatusText(status) {
+  const statusMap = {
+    'pending': 'Pending',
+    'verified': 'Verified',
+    'calling': 'Calling',
+    'completed': 'Completed',
+    'failed': 'Failed',
+    'cancelled': 'Cancelled',
+    'sms_sent': 'SMS Sent',
+    'retry_scheduled': '🔄 Retry Scheduled'
+  };
+  return statusMap[status] || status;
 }
 
 function updatePagination(pagination) {
