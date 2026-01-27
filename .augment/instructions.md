@@ -13,7 +13,12 @@ Before EVERY response, the agent MUST:
 3. ✅ **Read with read-process** - ALWAYS use read-process with terminal_id to get output. NEVER use read-terminal.
 4. ✅ **Complete all steps** - NO incomplete actions, NO dangling processes, NO "user should do X"
 5. ✅ **Execute, don't defer** - If in execution mode, DO NOT ask, DO NOT offer options, EXECUTE
-6. ✅ **Terminal ID** - Augment's internal tracking, NOT visible to user. User sees bash PID and TTY in VSCode.
+6. ✅ **THE ONLY PATTERN:**
+   ```
+   STEP 1: launch-process with wait=false → get terminal_id
+   STEP 2: read-process with that terminal_id → get output
+   ```
+   This is the ONLY way to run commands. No exceptions.
 
 ---
 
@@ -73,49 +78,33 @@ NEVER use wait=true - it causes timeouts and provides no output
 
 **BEFORE reasoning about ANY command output:**
 ```
-IF command was launched with wait=false (RECOMMENDED for long commands) THEN
+ALL commands MUST use wait=false:
     MUST use read-process with terminal_id to get output
     MUST NOT use read-terminal (doesn't accept terminal_id parameter)
     Process runs in background, you get terminal_id immediately
-    Call read-process to get the output when ready
-    This is the CORRECT way to avoid timeouts
-END IF
+    Call read-process to get the output
+    This is the ONLY correct pattern
 
-IF command was launched with wait=true (only for quick commands < 10 sec) THEN
-    Output is ALREADY in the tool result <output> section
-    MUST read the tool result output FIRST (it's already there!)
-    MUST NOT call read-terminal (wastes a turn - data already provided)
-    MUST NOT reason about output without reading the tool result
-    MUST NOT assume command succeeded without evidence
-    MUST NOT launch another command to "check" results
-
-    IF command times out THEN
-        ❌ DO NOT call read-terminal
-        ❌ DO NOT call git status to check
-        ❌ DO NOT call git log to check
-        ❌ This means you used wait=true for a long command - WRONG CHOICE
-        ✅ Next time: Use wait=false for long commands to prevent this
-    END IF
-END IF
-
-FORBIDDEN EVASION PATTERNS:
-❌ Long command with wait=true → times out → call git status to check
-❌ Long command with wait=true → times out → call read-terminal
-✅ Long command with wait=false → read-process with terminal_id → get full output
+FORBIDDEN PATTERNS:
+❌ Using wait=true for ANY command
+❌ Calling read-terminal
+❌ Calling git status to check results
+❌ Calling git log to check results
+✅ ALWAYS: wait=false → read-process with terminal_id → get full output
 ```
 
 **Violation Example:**
 ```
 ❌ BAD: launch-process + read-process in same tool block
-❌ BAD: git push with wait=true → times out → call read-terminal
-❌ BAD: git push with wait=true → times out → call git status to check
-❌ BAD: git commit with wait=true, max_wait_seconds=30 → times out → no output
-❌ BAD: docker build with wait=true → times out → can't see output
+❌ BAD: ANY command with wait=true
+❌ BAD: Calling read-terminal
+❌ BAD: Calling git status to check results
 
-✅ CORRECT: git commit with wait=false → read-process with terminal_id → get FULL output
-✅ CORRECT: git push with wait=false → read-process → see "END: git push" → confirm success
+✅ CORRECT: ALL commands with wait=false → read-process with terminal_id → get output
+✅ CORRECT: git commit with wait=false → read-process → see "END: git commit"
+✅ CORRECT: git push with wait=false → read-process → see "END: git push"
 ✅ CORRECT: docker build with wait=false → read-process → see build logs
-✅ ACCEPTABLE: ls -la with wait=true → output in tool result → read it directly
+✅ CORRECT: ls -la with wait=false → read-process → see file list
 ```
 
 ### 🔴 RULE 8 VIOLATION DETECTOR
@@ -125,9 +114,9 @@ FORBIDDEN EVASION PATTERNS:
 echo "START: descriptive action" && command 2>&1 && echo "END: descriptive action"
 ```
 
-**For long commands (git, docker), use wait=false:**
+**ALWAYS use wait=false:**
 ```bash
-# Launch with wait=false
+# Launch with wait=false (ALWAYS)
 launch-process: echo "START: git push" && git push origin main 2>&1 && echo "END: git push"
 wait=false
 
@@ -138,11 +127,11 @@ read-process: terminal_id=<from above>, wait=true
 **Violation Example:**
 ```
 ❌ BAD: git push origin main (missing echo markers)
-❌ BAD: git push with wait=true, max_wait_seconds=30 (will timeout)
-✅ CORRECT: git push with wait=false → read-process → see echo markers
+❌ BAD: ANY command with wait=true
+✅ CORRECT: ALL commands with wait=false → read-process → see echo markers
 ```
 
-**Rationale:** Echo markers prove the command completed. For long commands, use wait=false + read-process to get full output including markers without timeout.
+**Rationale:** Echo markers prove the command completed. ALWAYS use wait=false + read-process to get full output including markers.
 
 ### 🔴 RULE 15 VIOLATION DETECTOR
 
