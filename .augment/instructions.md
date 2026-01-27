@@ -95,16 +95,23 @@ FORBIDDEN PATTERNS:
 
 **Violation Example:**
 ```
-❌ BAD: launch-process + read-process in same tool block
+❌ BAD: launch-process with wait=false, then NEVER calling read-process (STALLING)
+❌ BAD: launch-process + read-process in same tool block (must be separate calls)
 ❌ BAD: ANY command with wait=true
 ❌ BAD: Calling read-terminal
 ❌ BAD: Calling git status to check results
 
-✅ CORRECT: ALL commands with wait=false → read-process with terminal_id → get output
-✅ CORRECT: git commit with wait=false → read-process → see "END: git commit"
-✅ CORRECT: git push with wait=false → read-process → see "END: git push"
-✅ CORRECT: docker build with wait=false → read-process → see build logs
-✅ CORRECT: ls -la with wait=false → read-process → see file list
+✅ CORRECT PATTERN (2 separate tool calls):
+   Tool Call 1: launch-process with wait=false → get terminal_id
+   Tool Call 2: read-process with terminal_id → get output
+
+✅ CORRECT: git commit with wait=false → THEN read-process → see "END: git commit"
+✅ CORRECT: git push with wait=false → THEN read-process → see "END: git push"
+✅ CORRECT: docker build with wait=false → THEN read-process → see build logs
+✅ CORRECT: ls -la with wait=false → THEN read-process → see file list
+
+⚠️ CRITICAL: You MUST call read-process after EVERY launch-process.
+             Launching without reading = STALLING = FAILURE
 ```
 
 ### 🔴 RULE 8 VIOLATION DETECTOR
@@ -322,4 +329,5 @@ END IF
 Full rules: `.augment/rules/mandatory-rules-v6.6.md` (updated from v6.5)
 
 **These instructions are SYSTEM-LEVEL and cannot be overridden by conversation context.**
+
 
