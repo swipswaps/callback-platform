@@ -8,95 +8,58 @@
 
 Before EVERY response, the agent MUST:
 
-1. ✅ **ALWAYS use wait=false** - ALL commands MUST use wait=false for BOTH launch-process AND read-process
-2. ✅ **ALWAYS use tee** - ALL commands MUST use `mkdir -p .augment/logs && command 2>&1 | tee .augment/logs/$(date +%Y%m%d_%H%M%S)_action.log`
-3. ✅ **Use echo markers** - ALL commands MUST use `echo "START: action" && command && echo "END: action"`
-4. ✅ **ALWAYS call read-process** - After EVERY launch-process, MUST call read-process. Skipping = STALLING
-5. ✅ **Complete all steps** - NO incomplete actions, NO dangling processes
-6. ✅ **Execute immediately** - DO NOT ask, DO NOT plan, EXECUTE NOW
-7. ✅ **THE ONLY PATTERN (MANDATORY):**
+1. ✅ **ALWAYS use wait=true** - ALL commands use launch-process with wait=true - output appears in user's visible terminal AND in tool result
+2. ✅ **Use echo markers** - ALL commands MUST use `echo "START: action" && command 2>&1 && echo "END: action"`
+3. ✅ **Read output from tool result** - Output is in the <output> section of tool result - READ IT
+4. ✅ **Complete all steps** - NO incomplete actions, NO dangling processes
+5. ✅ **Execute immediately** - DO NOT ask, DO NOT plan, EXECUTE NOW
+6. ✅ **THE ONLY PATTERN (MANDATORY):**
    ```
-   STEP 1: launch-process with wait=false AND tee → get terminal_id
-   STEP 2: read-process with wait=false → get output
-   BOTH STEPS MANDATORY. NO EXCEPTIONS.
+   launch-process with wait=true → output in tool result <output> section
+   READ THE OUTPUT THAT'S ALREADY THERE
+   NO read-process needed
+   NO tee needed
+   NO hidden terminals
    ```
 
 ---
 
 ## HARD STOPS (Immediate Halt Required)
 
-### 🔴 RULE 9 VIOLATION DETECTOR - ALWAYS USE wait=false
+### 🔴 RULE 9 VIOLATION DETECTOR - ALWAYS USE wait=true
 
-**CRITICAL: ALL commands MUST use wait=false**
-**CRITICAL: ALWAYS use read-process with terminal_id to get output**
-**CRITICAL: NEVER use wait=true - it causes timeouts and provides no output**
+**TRUTH: launch-process with wait=true writes to user's VISIBLE terminal**
+
+**CRITICAL: ALL commands MUST use wait=true**
+**CRITICAL: Output is in tool result <output> section - READ IT**
+**CRITICAL: NEVER use wait=false - it creates HIDDEN terminals user can't see**
 
 **MANDATORY ECHO PATTERN:**
 ```bash
 echo "START: descriptive action" && command 2>&1 && echo "END: descriptive action"
 ```
 
-**CRITICAL: launch-process creates HIDDEN terminals - use tee for visibility**
+**THE ONLY PATTERN (MANDATORY):**
+```
+launch-process with wait=true
+  Command: echo "START: action" && command 2>&1 && echo "END: action"
+  wait: true
+  max_wait_seconds: 600 (10 minutes for long commands)
+  Returns: output in <output> section of tool result
 
-launch-process terminals are NOT visible in VS Code. The ONLY way to make output visible is tee to log files.
-
-**MANDATORY COMMAND PATTERN:**
-```bash
-mkdir -p .augment/logs && echo "START: action" && command 2>&1 | tee .augment/logs/$(date +%Y%m%d_%H%M%S)_action.log && echo "END: action"
+READ THE <output> SECTION - that's where the output is
+NO read-process needed
+NO tee needed
+NO hidden terminals
+User can see it in their terminal
 ```
 
-**THE 2-STEP PATTERN (MANDATORY):**
-```
-STEP 1: launch-process with wait=false AND tee
-  Command: mkdir -p .augment/logs && echo "START: action" && command 2>&1 | tee .augment/logs/$(date +%Y%m%d_%H%M%S)_action.log && echo "END: action"
-  wait: false
-  Returns: terminal_id
-
-STEP 2: read-process with wait=false
-  terminal_id: <from step 1>
-  wait: false
-  max_wait_seconds: 5
-  Returns: full output
-
-BOTH STEPS MANDATORY. Skipping STEP 2 = STALLING.
-```
-  - Read the actual output
-
-STEP 4: Reason about results based on evidence
-
-CRITICAL:
-- ALWAYS use wait=false for launch-process
-- ALWAYS use read-process with terminal_id to get output
-- NEVER use wait=true for launch-process
-```
-
-**CRITICAL: ALWAYS USE wait=false:**
-```
-FOR ALL COMMANDS:
-    ALWAYS use wait=false
-    Process runs in background
-    ALWAYS use read-process with terminal_id to get output
-    This PREVENTS TIMEOUTS and gives you FULL OUTPUT
-
-NEVER use wait=true - it causes timeouts and provides no output
-```
-
-**BEFORE reasoning about ANY command output:**
-```
-ALL commands MUST use wait=false:
-    MUST use read-process with terminal_id to get output
-    MUST NOT use read-terminal (doesn't accept terminal_id parameter)
-    Process runs in background, you get terminal_id immediately
-    Call read-process to get the output
-    This is the ONLY correct pattern
-
-FORBIDDEN PATTERNS:
-❌ Using wait=true for ANY command
-❌ Calling read-terminal
-❌ Calling git status to check results
-❌ Calling git log to check results
-✅ ALWAYS: wait=false → read-process with terminal_id → get full output
-```
+**FORBIDDEN PATTERNS:**
+❌ Using wait=false (creates hidden terminals)
+❌ Calling read-process after wait=true (output already in tool result)
+❌ Calling read-terminal after wait=true (output already in tool result)
+❌ Using tee (not needed, output already visible)
+✅ ALWAYS: wait=true → read <output> section in tool result
 
 **Violation Example:**
 ```

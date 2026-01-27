@@ -92,12 +92,13 @@ echo "START: descriptive action" && command 2>&1 && echo "END: descriptive actio
 ```
 
 **For ALL commands:**
-- ALWAYS use `wait=false`
-- ALWAYS use `read-process` with terminal_id to get full output
+- ALWAYS use `wait=true`
+- Output appears in user's VISIBLE terminal
+- Output is in tool result <output> section - READ IT
 - Echo markers prove completion
-- NEVER use `wait=true` - it causes timeouts
+- NEVER use `wait=false` - it creates HIDDEN terminals user can't see
 
-**Rationale:** Echo markers prevent evasion by making output boundaries visible. ALWAYS using wait=false prevents timeouts and provides full output via read-process.
+**Rationale:** wait=true writes to user's visible terminal AND returns output in tool result. Echo markers prevent evasion by making output boundaries visible.
 
 ---
 
@@ -105,32 +106,28 @@ echo "START: descriptive action" && command 2>&1 && echo "END: descriptive actio
 
 Logs must be reviewed before reasoning or fixes.
 
-**Critical Implementation Detail - THE 2-STEP PATTERN:**
+**TRUTH: launch-process with wait=true writes to user's VISIBLE terminal**
 
-**NOTE: launch-process terminals are NOT user-visible in VS Code.**
-**Visibility MUST be achieved via tee to log files.**
+**THE ONLY PATTERN:**
 
-**STEP 1:** Call `launch-process` with `wait=false` AND tee → get terminal_id
-**STEP 2:** Call `read-process` with terminal_id AND `wait=false` → get output
+Call `launch-process` with `wait=true` → output in tool result <output> section
 
-**BOTH STEPS ARE MANDATORY. Skipping STEP 2 = STALLING = FAILURE.**
+**THAT'S IT. ONE STEP.**
 
-**MANDATORY TEE PATTERN:**
-```bash
-mkdir -p .augment/logs && echo "START: action" && command 2>&1 | tee .augment/logs/$(date +%Y%m%d_%H%M%S)_action.log && echo "END: action"
-```
+**CRITICAL: Use wait=true**
 
-**CRITICAL: Use wait=false for BOTH launch-process AND read-process**
+- ALWAYS use `wait=true` for launch-process
+- Output appears in user's VISIBLE terminal (they can see it)
+- Output is ALSO in tool result <output> section - READ IT
+- NEVER use `wait=false` - creates HIDDEN terminals user can't see
+- NEVER call `read-process` after wait=true - output already in tool result
+- NEVER call `read-terminal` after wait=true - output already in tool result
+- NEVER use tee - not needed, output already visible
+- Set max_wait_seconds high enough (600 = 10 minutes for long commands)
 
-- ALWAYS use `wait=false` for launch-process
-- ALWAYS use `wait=false` for read-process (using wait=true causes timeout stalls)
-- ALWAYS use tee to write output to `.augment/logs/` directory
-- ALWAYS use `read-process` with terminal_id to get output after EVERY launch-process
-- `wait=false` prevents timeouts and provides FULL output
-- NEVER use `wait=true` for either launch-process or read-process - it causes timeouts
-- NEVER call `read-terminal` (doesn't accept terminal_id parameter)
-- NEVER call additional commands to "check" results (git status, git log)
-- NEVER launch a process without reading it - this causes stalling
+**If command times out:**
+- Partial output is still in tool result <output> section
+- READ IT - don't call additional commands to check results
 
 ---
 
