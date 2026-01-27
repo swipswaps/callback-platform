@@ -107,15 +107,24 @@ Logs must be reviewed before reasoning or fixes.
 
 **Critical Implementation Detail - THE 2-STEP PATTERN:**
 
-**STEP 1:** Call `launch-process` with `wait=false` → get terminal_id
+**NOTE: launch-process terminals are NOT user-visible in VS Code.**
+**Visibility MUST be achieved via tee to log files.**
+
+**STEP 1:** Call `launch-process` with `wait=false` AND tee → get terminal_id
 **STEP 2:** Call `read-process` with terminal_id AND `wait=false` → get output
 
 **BOTH STEPS ARE MANDATORY. Skipping STEP 2 = STALLING = FAILURE.**
+
+**MANDATORY TEE PATTERN:**
+```bash
+mkdir -p .augment/logs && echo "START: action" && command 2>&1 | tee .augment/logs/$(date +%Y%m%d_%H%M%S)_action.log && echo "END: action"
+```
 
 **CRITICAL: Use wait=false for BOTH launch-process AND read-process**
 
 - ALWAYS use `wait=false` for launch-process
 - ALWAYS use `wait=false` for read-process (using wait=true causes timeout stalls)
+- ALWAYS use tee to write output to `.augment/logs/` directory
 - ALWAYS use `read-process` with terminal_id to get output after EVERY launch-process
 - `wait=false` prevents timeouts and provides FULL output
 - NEVER use `wait=true` for either launch-process or read-process - it causes timeouts

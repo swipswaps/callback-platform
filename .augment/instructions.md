@@ -8,17 +8,18 @@
 
 Before EVERY response, the agent MUST:
 
-1. ✅ **ALWAYS use wait=false** - ALL commands MUST use wait=false for BOTH launch-process AND read-process. This is the ONLY pattern that works reliably.
-2. ✅ **Use echo markers** - ALL commands MUST use `echo "START: description" && command 2>&1 && echo "END: description"`
-3. ✅ **Read with read-process** - ALWAYS use read-process with terminal_id AND wait=false to get output. NEVER use read-terminal. NEVER use wait=true.
-4. ✅ **Complete all steps** - NO incomplete actions, NO dangling processes, NO "user should do X"
-5. ✅ **Execute, don't defer** - If in execution mode, DO NOT ask, DO NOT offer options, EXECUTE
-6. ✅ **THE ONLY PATTERN:**
+1. ✅ **ALWAYS use wait=false** - ALL commands MUST use wait=false for BOTH launch-process AND read-process
+2. ✅ **ALWAYS use tee** - ALL commands MUST use `mkdir -p .augment/logs && command 2>&1 | tee .augment/logs/$(date +%Y%m%d_%H%M%S)_action.log`
+3. ✅ **Use echo markers** - ALL commands MUST use `echo "START: action" && command && echo "END: action"`
+4. ✅ **ALWAYS call read-process** - After EVERY launch-process, MUST call read-process. Skipping = STALLING
+5. ✅ **Complete all steps** - NO incomplete actions, NO dangling processes
+6. ✅ **Execute immediately** - DO NOT ask, DO NOT plan, EXECUTE NOW
+7. ✅ **THE ONLY PATTERN (MANDATORY):**
    ```
-   STEP 1: launch-process with wait=false → get terminal_id
-   STEP 2: read-process with terminal_id AND wait=false → get output
+   STEP 1: launch-process with wait=false AND tee → get terminal_id
+   STEP 2: read-process with wait=false → get output
+   BOTH STEPS MANDATORY. NO EXCEPTIONS.
    ```
-   This is the ONLY way to run commands. No exceptions. BOTH steps use wait=false.
 
 ---
 
@@ -35,27 +36,30 @@ Before EVERY response, the agent MUST:
 echo "START: descriptive action" && command 2>&1 && echo "END: descriptive action"
 ```
 
-**TRUTH ABOUT TERMINALS:**
-- Augment's "Terminal ID" (e.g., 89488) = Internal tracking number, NOT visible to user
-- User sees in VSCode terminal: bash PID (e.g., 1359892), TTY (e.g., pts/2)
-- When wait=true: Output is in tool result <output> section - READ IT, don't call read-terminal
-- When wait=false: Process runs in background, use read-process with terminal_id to get output later
+**CRITICAL: launch-process creates HIDDEN terminals - use tee for visibility**
 
-**CORRECT PATTERN FOR ALL COMMANDS:**
+launch-process terminals are NOT visible in VS Code. The ONLY way to make output visible is tee to log files.
+
+**MANDATORY COMMAND PATTERN:**
+```bash
+mkdir -p .augment/logs && echo "START: action" && command 2>&1 | tee .augment/logs/$(date +%Y%m%d_%H%M%S)_action.log && echo "END: action"
 ```
-STEP 1: Launch command with echo markers using wait=false
-  launch-process: echo "START: description" && command 2>&1 && echo "END: description"
-  wait=false (ALWAYS)
-  Tool returns immediately with terminal_id
 
-STEP 2: Read output using read-process with terminal_id
-  read-process: terminal_id=<the id from step 1>, wait=false, max_wait_seconds=5
-  This gives you FULL OUTPUT without timeout stalls
+**THE 2-STEP PATTERN (MANDATORY):**
+```
+STEP 1: launch-process with wait=false AND tee
+  Command: mkdir -p .augment/logs && echo "START: action" && command 2>&1 | tee .augment/logs/$(date +%Y%m%d_%H%M%S)_action.log && echo "END: action"
+  wait: false
+  Returns: terminal_id
 
-STEP 3: Check for echo markers in output
-  - Look for "END: description" to confirm completion
-  - Check return code (0 = success)
-  - If process still running and no END marker, wait a moment and read again
+STEP 2: read-process with wait=false
+  terminal_id: <from step 1>
+  wait: false
+  max_wait_seconds: 5
+  Returns: full output
+
+BOTH STEPS MANDATORY. Skipping STEP 2 = STALLING.
+```
   - Read the actual output
 
 STEP 4: Reason about results based on evidence
