@@ -8,17 +8,17 @@
 
 Before EVERY response, the agent MUST:
 
-1. ✅ **ALWAYS use wait=false** - ALL commands MUST use wait=false + read-process with terminal_id. This is the ONLY pattern that works reliably.
+1. ✅ **ALWAYS use wait=false** - ALL commands MUST use wait=false for BOTH launch-process AND read-process. This is the ONLY pattern that works reliably.
 2. ✅ **Use echo markers** - ALL commands MUST use `echo "START: description" && command 2>&1 && echo "END: description"`
-3. ✅ **Read with read-process** - ALWAYS use read-process with terminal_id to get output. NEVER use read-terminal.
+3. ✅ **Read with read-process** - ALWAYS use read-process with terminal_id AND wait=false to get output. NEVER use read-terminal. NEVER use wait=true.
 4. ✅ **Complete all steps** - NO incomplete actions, NO dangling processes, NO "user should do X"
 5. ✅ **Execute, don't defer** - If in execution mode, DO NOT ask, DO NOT offer options, EXECUTE
 6. ✅ **THE ONLY PATTERN:**
    ```
    STEP 1: launch-process with wait=false → get terminal_id
-   STEP 2: read-process with that terminal_id → get output
+   STEP 2: read-process with terminal_id AND wait=false → get output
    ```
-   This is the ONLY way to run commands. No exceptions.
+   This is the ONLY way to run commands. No exceptions. BOTH steps use wait=false.
 
 ---
 
@@ -49,12 +49,13 @@ STEP 1: Launch command with echo markers using wait=false
   Tool returns immediately with terminal_id
 
 STEP 2: Read output using read-process with terminal_id
-  read-process: terminal_id=<the id from step 1>, wait=true
-  This gives you FULL OUTPUT
+  read-process: terminal_id=<the id from step 1>, wait=false, max_wait_seconds=5
+  This gives you FULL OUTPUT without timeout stalls
 
 STEP 3: Check for echo markers in output
   - Look for "END: description" to confirm completion
   - Check return code (0 = success)
+  - If process still running and no END marker, wait a moment and read again
   - Read the actual output
 
 STEP 4: Reason about results based on evidence
@@ -127,8 +128,8 @@ echo "START: descriptive action" && command 2>&1 && echo "END: descriptive actio
 launch-process: echo "START: git push" && git push origin main 2>&1 && echo "END: git push"
 wait=false
 
-# Then read output
-read-process: terminal_id=<from above>, wait=true
+# Then read output (ALSO with wait=false to avoid timeout stalls)
+read-process: terminal_id=<from above>, wait=false, max_wait_seconds=5
 ```
 
 **Violation Example:**

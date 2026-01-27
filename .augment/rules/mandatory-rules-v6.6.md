@@ -108,14 +108,17 @@ Logs must be reviewed before reasoning or fixes.
 **Critical Implementation Detail - THE 2-STEP PATTERN:**
 
 **STEP 1:** Call `launch-process` with `wait=false` → get terminal_id
-**STEP 2:** Call `read-process` with that terminal_id → get output
+**STEP 2:** Call `read-process` with terminal_id AND `wait=false` → get output
 
 **BOTH STEPS ARE MANDATORY. Skipping STEP 2 = STALLING = FAILURE.**
 
-- ALWAYS use `wait=false` for ALL commands
+**CRITICAL: Use wait=false for BOTH launch-process AND read-process**
+
+- ALWAYS use `wait=false` for launch-process
+- ALWAYS use `wait=false` for read-process (using wait=true causes timeout stalls)
 - ALWAYS use `read-process` with terminal_id to get output after EVERY launch-process
 - `wait=false` prevents timeouts and provides FULL output
-- NEVER use `wait=true` - it causes timeouts
+- NEVER use `wait=true` for either launch-process or read-process - it causes timeouts
 - NEVER call `read-terminal` (doesn't accept terminal_id parameter)
 - NEVER call additional commands to "check" results (git status, git log)
 - NEVER launch a process without reading it - this causes stalling
