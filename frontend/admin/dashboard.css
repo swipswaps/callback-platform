@@ -198,6 +198,18 @@
   text-align: center;
 }
 
+.stat-clickable {
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: 2px solid transparent;
+}
+
+.stat-clickable:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  border-color: #3b82f6;
+}
+
 .stat-label {
   color: #6b7280;
   font-size: 14px;

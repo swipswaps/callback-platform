@@ -143,8 +143,15 @@ async function cancelRequest(requestId) {
     const data = await response.json();
 
     if (data.success) {
-      alert('Request cancelled successfully');
-      await loadData();
+      // Update live without page refresh
+      await Promise.all([loadStats(), loadRequests()]);
+
+      // Show success message briefly
+      const row = document.querySelector(`[onclick*="${requestId}"]`)?.closest('tr');
+      if (row) {
+        row.style.backgroundColor = '#d1fae5';
+        setTimeout(() => { row.style.backgroundColor = ''; }, 2000);
+      }
     } else {
       alert(`Failed to cancel request: ${data.error || 'Unknown error'}`);
     }
@@ -312,6 +319,19 @@ function updatePagination(pagination) {
   nextPageBtn.disabled = !pagination.has_more;
 }
 
+function filterByStatus(status) {
+  // Update the filter dropdown
+  statusFilter.value = status;
+
+  // Apply the filter
+  currentFilters.status = status;
+  currentFilters.phone = '';
+  phoneFilter.value = '';
+  currentOffset = 0;
+
+  loadRequests();
+}
+
 function applyFilters() {
   currentFilters.status = statusFilter.value;
   currentFilters.phone = phoneFilter.value;
@@ -381,8 +401,15 @@ async function retryRequest(requestId) {
     const data = await response.json();
 
     if (response.ok) {
-      alert('Callback retry initiated successfully!');
-      await refreshDashboard();
+      // Update live without page refresh
+      await Promise.all([loadStats(), loadRequests()]);
+
+      // Show success message briefly
+      const row = document.querySelector(`[onclick*="${requestId}"]`)?.closest('tr');
+      if (row) {
+        row.style.backgroundColor = '#dbeafe';
+        setTimeout(() => { row.style.backgroundColor = ''; }, 2000);
+      }
     } else {
       alert('Failed to retry: ' + (data.error || 'Unknown error'));
     }

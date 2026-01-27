@@ -38,28 +38,20 @@
       <section class="stats-section">
         <h2>📈 Statistics</h2>
         <div class="stats-grid">
-          <div class="stat-card">
+          <div class="stat-card stat-clickable" onclick="filterByStatus('')" title="Click to show all requests">
             <div class="stat-label">Total Requests</div>
             <div class="stat-value" id="totalRequests">-</div>
           </div>
-          <div class="stat-card">
-            <div class="stat-label">Success Rate</div>
-            <div class="stat-value" id="successRate">-</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">Last 24h</div>
-            <div class="stat-value" id="last24h">-</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">Pending</div>
-            <div class="stat-value" id="pendingCount">-</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">Completed</div>
+          <div class="stat-card stat-clickable" onclick="filterByStatus('completed')" title="Click to show only completed requests">
+            <div class="stat-label">✅ Completed</div>
             <div class="stat-value" id="completedCount">-</div>
           </div>
-          <div class="stat-card">
-            <div class="stat-label">Failed</div>
+          <div class="stat-card stat-clickable" onclick="filterByStatus('pending')" title="Click to show pending requests - TAKE ACTION">
+            <div class="stat-label">⏳ Pending</div>
+            <div class="stat-value" id="pendingCount">-</div>
+          </div>
+          <div class="stat-card stat-clickable" onclick="filterByStatus('failed')" title="Click to show failed requests - NEEDS RETRY">
+            <div class="stat-label">❌ Failed</div>
             <div class="stat-value" id="failedCount">-</div>
           </div>
         </div>
