@@ -86,19 +86,25 @@ All success claims require logs, tests, references, or official documentation co
 
 ## RULE 8 — PROCESS OUTPUT CAPTURE RELIABILITY
 
-All process executions must use echo markers:
+**PROVEN FACT: launch-process with wait=true runs in user's visible terminal**
+
+All process executions must use:
 ```bash
-echo "START: descriptive action" && command 2>&1 && echo "END: descriptive action"
+launch-process:
+  command: echo "START: action" && command 2>&1 && echo "END: action"
+  wait: true
+  max_wait_seconds: 3
 ```
 
 **For ALL commands:**
 - ALWAYS use `wait=true`
-- Output appears in user's VISIBLE terminal
+- ALWAYS use `max_wait_seconds=3`
 - Output is in tool result <output> section - READ IT
-- Echo markers prove completion
-- NEVER use `wait=false` - it creates HIDDEN terminals user can't see
+- NEVER use `wait=false` - creates hidden background terminals
+- NEVER call read-process - output already in tool result
+- NEVER call read-terminal - output already in tool result
 
-**Rationale:** wait=true writes to user's visible terminal AND returns output in tool result. Echo markers prevent evasion by making output boundaries visible.
+**Rationale:** wait=true runs in user's visible terminal (proven by ps -p $$ showing same PID/TTY). Output is in tool result <output> section.
 
 ---
 
@@ -106,28 +112,33 @@ echo "START: descriptive action" && command 2>&1 && echo "END: descriptive actio
 
 Logs must be reviewed before reasoning or fixes.
 
-**TRUTH: launch-process with wait=true writes to user's VISIBLE terminal**
+**PROVEN FACT: launch-process with wait=true runs in user's visible terminal**
+
+Evidence: ps -p $$ output shows same PID/TTY as user's terminal
 
 **THE ONLY PATTERN:**
 
-Call `launch-process` with `wait=true` → output in tool result <output> section
+```
+launch-process:
+  command: echo "START: action" && command 2>&1 && echo "END: action"
+  wait: true
+  max_wait_seconds: 3
+  cwd: /home/owner/Documents/696d62a9-9c68-832a-b5af-a90eb5243316
 
-**THAT'S IT. ONE STEP.**
+Output is in tool result <output> section - READ IT
+```
 
-**CRITICAL: Use wait=true**
+**CRITICAL:**
+- ALWAYS use `wait=true` and `max_wait_seconds=3`
+- Output is in tool result <output> section - READ IT
+- NEVER use `wait=false` - creates hidden background terminals
+- NEVER call `read-process` - output already in tool result
+- NEVER call `read-terminal` - output already in tool result
+- NEVER call git status/log to check results - output already there
 
-- ALWAYS use `wait=true` for launch-process
-- Output appears in user's VISIBLE terminal (they can see it)
-- Output is ALSO in tool result <output> section - READ IT
-- NEVER use `wait=false` - creates HIDDEN terminals user can't see
-- NEVER call `read-process` after wait=true - output already in tool result
-- NEVER call `read-terminal` after wait=true - output already in tool result
-- NEVER use tee - not needed, output already visible
-- Set max_wait_seconds high enough (600 = 10 minutes for long commands)
-
-**If command times out:**
-- Partial output is still in tool result <output> section
-- READ IT - don't call additional commands to check results
+**If command times out at 3 seconds:**
+- Partial output is in tool result <output> section - READ IT
+- Don't call additional commands to check results
 
 ---
 

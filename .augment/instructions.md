@@ -8,18 +8,17 @@
 
 Before EVERY response, the agent MUST:
 
-1. ✅ **ALWAYS use wait=true** - ALL commands use launch-process with wait=true - output appears in user's visible terminal AND in tool result
-2. ✅ **Use echo markers** - ALL commands MUST use `echo "START: action" && command 2>&1 && echo "END: action"`
-3. ✅ **Read output from tool result** - Output is in the <output> section of tool result - READ IT
-4. ✅ **Complete all steps** - NO incomplete actions, NO dangling processes
-5. ✅ **Execute immediately** - DO NOT ask, DO NOT plan, EXECUTE NOW
-6. ✅ **THE ONLY PATTERN (MANDATORY):**
+1. ✅ **ALWAYS use wait=true** - launch-process with wait=true runs in user's visible terminal
+2. ✅ **ALWAYS use max_wait_seconds=3** - All commands use max_wait_seconds=3
+3. ✅ **Output is in tool result** - Read the <output> section, don't call read-process
+4. ✅ **Use echo markers** - ALL commands MUST use `echo "START: action" && command 2>&1 && echo "END: action"`
+5. ✅ **Complete all steps** - NO incomplete actions, NO dangling processes
+6. ✅ **Execute immediately** - DO NOT ask, DO NOT plan, EXECUTE NOW
+7. ✅ **THE ONLY PATTERN (MANDATORY):**
    ```
-   launch-process with wait=true → output in tool result <output> section
-   READ THE OUTPUT THAT'S ALREADY THERE
-   NO read-process needed
-   NO tee needed
-   NO hidden terminals
+   launch-process with wait=true, max_wait_seconds=3
+   Output is in <output> section of tool result - READ IT
+   NO read-process, NO read-terminal, NO tee
    ```
 
 ---
@@ -28,38 +27,32 @@ Before EVERY response, the agent MUST:
 
 ### 🔴 RULE 9 VIOLATION DETECTOR - ALWAYS USE wait=true
 
-**TRUTH: launch-process with wait=true writes to user's VISIBLE terminal**
+**PROVEN FACT: launch-process with wait=true runs in user's VISIBLE terminal**
+
+Evidence: ps -p $$ shows same PID/TTY as user's terminal
 
 **CRITICAL: ALL commands MUST use wait=true**
 **CRITICAL: Output is in tool result <output> section - READ IT**
-**CRITICAL: NEVER use wait=false - it creates HIDDEN terminals user can't see**
+**CRITICAL: NEVER use wait=false - creates hidden background terminals**
 
-**MANDATORY ECHO PATTERN:**
+**MANDATORY PATTERN:**
 ```bash
-echo "START: descriptive action" && command 2>&1 && echo "END: descriptive action"
-```
-
-**THE ONLY PATTERN (MANDATORY):**
-```
-launch-process with wait=true
-  Command: echo "START: action" && command 2>&1 && echo "END: action"
+launch-process:
+  command: echo "START: action" && command 2>&1 && echo "END: action"
   wait: true
-  max_wait_seconds: 600 (10 minutes for long commands)
-  Returns: output in <output> section of tool result
+  max_wait_seconds: 3
+  cwd: /home/owner/Documents/696d62a9-9c68-832a-b5af-a90eb5243316
 
-READ THE <output> SECTION - that's where the output is
-NO read-process needed
-NO tee needed
-NO hidden terminals
-User can see it in their terminal
+Tool returns output in <output> section - READ IT
 ```
 
 **FORBIDDEN PATTERNS:**
-❌ Using wait=false (creates hidden terminals)
-❌ Calling read-process after wait=true (output already in tool result)
-❌ Calling read-terminal after wait=true (output already in tool result)
-❌ Using tee (not needed, output already visible)
-✅ ALWAYS: wait=true → read <output> section in tool result
+❌ Using wait=false (creates hidden terminals user can't see)
+❌ Calling read-process (output already in tool result)
+❌ Calling read-terminal (output already in tool result)
+❌ Using tee (not needed)
+❌ Calling git status/log to check results (output already there)
+✅ CORRECT: wait=true, max_wait_seconds=3, read <output> section
 
 **Violation Example:**
 ```
