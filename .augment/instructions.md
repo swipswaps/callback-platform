@@ -36,28 +36,41 @@ echo "START: descriptive action" && command 2>&1 && echo "END: descriptive actio
 - When wait=true: Output is in tool result <output> section - READ IT, don't call read-terminal
 - When wait=false: Process runs in background, use read-process with terminal_id to get output later
 
-**CORRECT PATTERN:**
+**CORRECT PATTERN FOR LONG COMMANDS (git, docker, etc.):**
 ```
-STEP 1: Launch command with echo markers
+STEP 1: Launch command with echo markers using wait=false
   launch-process: echo "START: git push" && git push origin main 2>&1 && echo "END: git push"
-  (Note: Use wait=true for commands that must complete before proceeding)
+  wait=false (prevents timeouts)
+  Tool returns immediately with terminal_id
 
-STEP 2: Tool returns with output OR timeout
+STEP 2: Read output using read-process with terminal_id
+  read-process: terminal_id=<the id from step 1>, wait=true
+  This gives you FULL OUTPUT without timeout
 
-STEP 3: The output is ALREADY IN THE TOOL RESULT - read it from there!
-  - If wait=true: Output is in the <output> section of tool result
-  - If timeout occurs: Partial output is STILL in the <output> section
-  - DO NOT call read-terminal or read-process - the data is already provided!
+STEP 3: Check for echo markers in output
+  - Look for "END: git push" to confirm completion
+  - Check return code (0 = success)
+  - Read the actual output (e.g., "Total 4 (delta 2)")
 
-STEP 4: ONLY AFTER reading the tool result output, reason about results
+STEP 4: Reason about results based on evidence
 
-CRITICAL: When launch-process with wait=true completes or times out,
-the output is in the TOOL RESULT itself. You already have it.
-DO NOT waste a turn calling read-terminal!
+CRITICAL: For long commands (git commit, git push, docker build):
+- ALWAYS use wait=false to prevent timeouts
+- ALWAYS use read-process with terminal_id to get output
+- NEVER use wait=true for commands that might take > 10 seconds
+```
 
-NEVER call read-terminal after launch-process with wait=true
-NEVER ignore the output already in the tool result
-NEVER reason without reading the tool result output first
+**PATTERN FOR QUICK COMMANDS (< 10 seconds):**
+```
+STEP 1: Launch command with wait=true
+  launch-process: echo "START: quick command" && ls -la 2>&1 && echo "END: quick command"
+  wait=true, max_wait_seconds=10
+
+STEP 2: Output is in tool result <output> section
+  Read it directly from there
+  DO NOT call read-terminal or read-process
+
+STEP 3: Reason about results
 ```
 
 **CRITICAL: WHEN TO USE wait=true vs wait=false:**
@@ -78,7 +91,15 @@ END IF
 
 **BEFORE reasoning about ANY command output:**
 ```
-IF command was launched with wait=true THEN
+IF command was launched with wait=false (RECOMMENDED for long commands) THEN
+    MUST use read-process with terminal_id to get output
+    MUST NOT use read-terminal (doesn't accept terminal_id parameter)
+    Process runs in background, you get terminal_id immediately
+    Call read-process to get the output when ready
+    This is the CORRECT way to avoid timeouts
+END IF
+
+IF command was launched with wait=true (only for quick commands < 10 sec) THEN
     Output is ALREADY in the tool result <output> section
     MUST read the tool result output FIRST (it's already there!)
     MUST NOT call read-terminal (wastes a turn - data already provided)
@@ -86,39 +107,33 @@ IF command was launched with wait=true THEN
     MUST NOT assume command succeeded without evidence
     MUST NOT launch another command to "check" results
 
-    FORBIDDEN EVASION PATTERNS:
-    ❌ Command times out → call read-terminal (data already in tool result!)
-    ❌ Command times out → launch "git status" to check
-    ❌ Command times out → launch "git log" to check
-    ✅ Command times out → READ THE TOOL RESULT OUTPUT (already there!) → reason based on evidence
-    ✅ Tool result shows "END: git push" → command succeeded even if timeout occurred
-
-    BETTER SOLUTION TO TIMEOUTS:
-    ❌ BAD: wait=true with max_wait_seconds=30 → command times out → no output
-    ✅ GOOD: wait=false → read-process with terminal_id → get FULL output, no timeout
+    IF command times out THEN
+        ❌ DO NOT call read-terminal
+        ❌ DO NOT call git status to check
+        ❌ DO NOT call git log to check
+        ❌ This means you used wait=true for a long command - WRONG CHOICE
+        ✅ Next time: Use wait=false for long commands to prevent this
+    END IF
 END IF
 
-IF command was launched with wait=false THEN
-    MUST use read-process with terminal_id to get output
-    MUST NOT use read-terminal (doesn't accept terminal_id parameter)
-    Process runs in background, you get terminal_id immediately
-    Call read-process to get the output when ready
-END IF
+FORBIDDEN EVASION PATTERNS:
+❌ Long command with wait=true → times out → call git status to check
+❌ Long command with wait=true → times out → call read-terminal
+✅ Long command with wait=false → read-process with terminal_id → get full output
 ```
 
 **Violation Example:**
 ```
 ❌ BAD: launch-process + read-process in same tool block
-❌ BAD: git push times out → call read-terminal (WASTES TURN - output already in tool result!)
-❌ BAD: git push times out → launch "git status" → reason about status (EVASION!)
-❌ BAD: git push times out → launch "git log" → reason about log (EVASION!)
-❌ BAD: git commit with wait=true, max_wait_seconds=30 → times out → no output available
+❌ BAD: git push with wait=true → times out → call read-terminal
+❌ BAD: git push with wait=true → times out → call git status to check
+❌ BAD: git commit with wait=true, max_wait_seconds=30 → times out → no output
+❌ BAD: docker build with wait=true → times out → can't see output
 
-✅ GOOD: launch-process with wait=true → tool returns → READ TOOL RESULT OUTPUT → reason
-✅ GOOD: git push times out → READ TOOL RESULT → see "END: git push" → confirm success
-✅ GOOD: Tool result shows "Total 4 (delta 2)" in output → command succeeded
-✅ BEST: git commit with wait=false → read-process with terminal_id → get FULL output, no timeout
-✅ BEST: git push with wait=false → read-process with terminal_id → see "END: git push" → confirm success
+✅ CORRECT: git commit with wait=false → read-process with terminal_id → get FULL output
+✅ CORRECT: git push with wait=false → read-process → see "END: git push" → confirm success
+✅ CORRECT: docker build with wait=false → read-process → see build logs
+✅ ACCEPTABLE: ls -la with wait=true → output in tool result → read it directly
 ```
 
 ### 🔴 RULE 8 VIOLATION DETECTOR
@@ -128,14 +143,24 @@ END IF
 echo "START: descriptive action" && command 2>&1 && echo "END: descriptive action"
 ```
 
-**Violation Example:**
-```
-❌ BAD: git push origin main
-❌ BAD: git push origin main 2>&1  (missing echo markers)
-✅ GOOD: echo "START: git push" && git push origin main 2>&1 && echo "END: git push"
+**For long commands (git, docker), use wait=false:**
+```bash
+# Launch with wait=false
+launch-process: echo "START: git push" && git push origin main 2>&1 && echo "END: git push"
+wait=false
+
+# Then read output
+read-process: terminal_id=<from above>, wait=true
 ```
 
-**Rationale:** Echo markers prove the command completed. When wait=true, the output (including START/END markers) is in the tool result <output> section. READ IT - don't waste a turn calling read-terminal!
+**Violation Example:**
+```
+❌ BAD: git push origin main (missing echo markers)
+❌ BAD: git push with wait=true, max_wait_seconds=30 (will timeout)
+✅ CORRECT: git push with wait=false → read-process → see echo markers
+```
+
+**Rationale:** Echo markers prove the command completed. For long commands, use wait=false + read-process to get full output including markers without timeout.
 
 ### 🔴 RULE 15 VIOLATION DETECTOR
 
@@ -151,7 +176,7 @@ END IF
 **Violation Example:**
 ```
 ❌ BAD: "I started the git push, you should check if it completed"
-✅ GOOD: Launches git push → reads terminal → confirms success → reports completion
+✅ CORRECT: Launches git push with wait=false → read-process with terminal_id → confirms success → reports completion
 ```
 
 ### 🔴 RULE 4 VIOLATION DETECTOR
@@ -176,9 +201,10 @@ END IF
 **AFTER editing backend/app.py OR .env:**
 ```
 IF file in [backend/app.py, .env, docker-compose.yml] was modified THEN
-    MUST run: docker compose down && docker compose up -d --build backend 2>&1 | tee /tmp/docker_rebuild_$(date +%s).log
-    MUST read terminal to confirm rebuild
-    MUST verify container started successfully
+    MUST run with wait=false:
+      echo "START: docker rebuild" && docker compose down && docker compose up -d --build backend 2>&1 && echo "END: docker rebuild"
+    MUST use read-process with terminal_id to get output
+    MUST verify container started successfully (check for "END: docker rebuild")
     MUST NOT emit response until rebuild confirmed
 END IF
 ```

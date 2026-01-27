@@ -86,12 +86,21 @@ All success claims require logs, tests, references, or official documentation co
 
 ## RULE 8 — PROCESS OUTPUT CAPTURE RELIABILITY
 
-All process executions must use persistent logging WITH echo markers:
+All process executions must use echo markers:
 ```bash
-echo "START: descriptive action" && command 2>&1 | tee /tmp/descriptive_name_$(date +%s).log && echo "END: descriptive action"
+echo "START: descriptive action" && command 2>&1 && echo "END: descriptive action"
 ```
 
-**Rationale:** Echo markers prevent evasion by making output boundaries visible even when truncated.
+**For long commands (git commit, git push, docker build):**
+- Use `wait=false` to prevent timeouts
+- Use `read-process` with terminal_id to get full output
+- Echo markers prove completion even if output is long
+
+**For quick commands (< 10 seconds):**
+- Use `wait=true`
+- Output appears in tool result `<output>` section
+
+**Rationale:** Echo markers prevent evasion by making output boundaries visible. Using wait=false for long commands prevents timeouts and provides full output via read-process.
 
 ---
 
