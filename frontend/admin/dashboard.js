@@ -175,7 +175,7 @@ async function loadStats() {
     
     const data = await response.json();
     const stats = data.stats;
-    
+
     // Update stat cards
     totalRequests.textContent = stats.total_requests.toLocaleString();
     successRate.textContent = `${stats.success_rate}%`;
