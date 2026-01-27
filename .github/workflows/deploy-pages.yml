@@ -26,7 +26,15 @@ jobs:
       
       - name: Setup Pages
         uses: actions/configure-pages@v4
-      
+
+      - name: Inject build metadata
+        run: |
+          COMMIT=$(git rev-parse --short HEAD)
+          TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          sed -i \
+            -e "s|</head>|<meta name=\"build-commit\" content=\"$COMMIT\" />\n<meta name=\"build-time\" content=\"$TIME\" />\n</head>|" \
+            frontend/admin/dashboard.html
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:

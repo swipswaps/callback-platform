@@ -824,5 +824,76 @@ async function bulkCancel() {
 // Make bulk functions global
 window.toggleRowSelection = toggleRowSelection;
 
+// Version Detection (one-shot, fail-silent)
+(function checkDeploymentVersion() {
+  try {
+    const metaCommit = document.querySelector('meta[name="build-commit"]')?.content;
+    const metaTime = document.querySelector('meta[name="build-time"]')?.content;
 
+    if (!metaCommit) return; // No build info, skip
 
+    fetch('https://api.github.com/repos/swipswaps/callback-platform/commits/main', {
+      headers: { 'Accept': 'application/vnd.github.v3+json' },
+      cache: 'no-store'
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data?.sha) return;
+
+        const remoteCommit = data.sha.substring(0, 7);
+
+        if (remoteCommit !== metaCommit) {
+          showVersionBanner(metaCommit, remoteCommit, metaTime);
+        }
+      })
+      .catch(() => {}); // Fail silently
+  } catch (_) {}
+})();
+
+function showVersionBanner(local, remote, buildTime) {
+  const banner = document.createElement('div');
+  banner.id = 'versionBanner';
+  banner.style.cssText = `
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: #1e293b;
+    color: #e2e8f0;
+    font-size: 13px;
+    padding: 10px 16px;
+    z-index: 10000;
+    border-top: 2px solid #3b82f6;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  `;
+
+  const message = document.createElement('div');
+  message.innerHTML = `
+    ℹ️ You are viewing build <strong>${local}</strong>.
+    A newer build (<strong>${remote}</strong>) exists on GitHub.
+    Updates may take time to reach all users.
+  `;
+
+  const actions = document.createElement('div');
+  actions.style.cssText = 'display: flex; gap: 10px;';
+
+  const refreshBtn = document.createElement('button');
+  refreshBtn.textContent = 'Refresh';
+  refreshBtn.className = 'btn btn-sm btn-secondary';
+  refreshBtn.onclick = () => location.reload();
+
+  const dismissBtn = document.createElement('button');
+  dismissBtn.textContent = 'Dismiss';
+  dismissBtn.className = 'btn btn-sm btn-secondary';
+  dismissBtn.onclick = () => banner.remove();
+
+  actions.appendChild(refreshBtn);
+  actions.appendChild(dismissBtn);
+
+  banner.appendChild(message);
+  banner.appendChild(actions);
+
+  document.body.appendChild(banner);
+}
