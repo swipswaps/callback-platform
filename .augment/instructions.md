@@ -8,22 +8,22 @@
 
 Before EVERY response, the agent MUST:
 
-1. ✅ **The output is ALREADY in the tool result** - When using launch-process with wait=true, the output is in the <output> section. DO NOT call read-terminal (wastes turn).
+1. ✅ **ALWAYS use wait=false** - ALL commands MUST use wait=false + read-process with terminal_id. This is the ONLY pattern that works reliably.
 2. ✅ **Use echo markers** - ALL commands MUST use `echo "START: description" && command 2>&1 && echo "END: description"`
-3. ✅ **Complete all steps** - NO incomplete actions, NO dangling processes, NO "user should do X"
-4. ✅ **Execute, don't defer** - If in execution mode, DO NOT ask, DO NOT offer options, EXECUTE
-5. ✅ **Read what's already there** - Tool result <output> section contains the command output. READ IT.
-6. ✅ **STOP LYING about terminals** - Augment's "Terminal ID" is internal tracking, NOT visible to user. User sees bash PID and TTY in their VSCode terminal.
+3. ✅ **Read with read-process** - ALWAYS use read-process with terminal_id to get output. NEVER use read-terminal.
+4. ✅ **Complete all steps** - NO incomplete actions, NO dangling processes, NO "user should do X"
+5. ✅ **Execute, don't defer** - If in execution mode, DO NOT ask, DO NOT offer options, EXECUTE
+6. ✅ **Terminal ID** - Augment's internal tracking, NOT visible to user. User sees bash PID and TTY in VSCode.
 
 ---
 
 ## HARD STOPS (Immediate Halt Required)
 
-### 🔴 RULE 9 VIOLATION DETECTOR - TERMINAL OUTPUT IS ALREADY IN TOOL RESULT
+### 🔴 RULE 9 VIOLATION DETECTOR - ALWAYS USE wait=false
 
-**CRITICAL: When using launch-process with wait=true, output is in the <output> section of tool result**
-**CRITICAL: DO NOT call read-terminal after wait=true - the output is ALREADY THERE**
-**CRITICAL: DO NOT lie about "Terminal ID" - that's Augment's internal tracking, user sees bash PID**
+**CRITICAL: ALL commands MUST use wait=false**
+**CRITICAL: ALWAYS use read-process with terminal_id to get output**
+**CRITICAL: NEVER use wait=true - it causes timeouts and provides no output**
 
 **MANDATORY ECHO PATTERN:**
 ```bash
@@ -36,57 +36,39 @@ echo "START: descriptive action" && command 2>&1 && echo "END: descriptive actio
 - When wait=true: Output is in tool result <output> section - READ IT, don't call read-terminal
 - When wait=false: Process runs in background, use read-process with terminal_id to get output later
 
-**CORRECT PATTERN FOR LONG COMMANDS (git, docker, etc.):**
+**CORRECT PATTERN FOR ALL COMMANDS:**
 ```
 STEP 1: Launch command with echo markers using wait=false
-  launch-process: echo "START: git push" && git push origin main 2>&1 && echo "END: git push"
-  wait=false (prevents timeouts)
+  launch-process: echo "START: description" && command 2>&1 && echo "END: description"
+  wait=false (ALWAYS)
   Tool returns immediately with terminal_id
 
 STEP 2: Read output using read-process with terminal_id
   read-process: terminal_id=<the id from step 1>, wait=true
-  This gives you FULL OUTPUT without timeout
+  This gives you FULL OUTPUT
 
 STEP 3: Check for echo markers in output
-  - Look for "END: git push" to confirm completion
+  - Look for "END: description" to confirm completion
   - Check return code (0 = success)
-  - Read the actual output (e.g., "Total 4 (delta 2)")
+  - Read the actual output
 
 STEP 4: Reason about results based on evidence
 
-CRITICAL: For long commands (git commit, git push, docker build):
-- ALWAYS use wait=false to prevent timeouts
+CRITICAL:
+- ALWAYS use wait=false for launch-process
 - ALWAYS use read-process with terminal_id to get output
-- NEVER use wait=true for commands that might take > 10 seconds
+- NEVER use wait=true for launch-process
 ```
 
-**PATTERN FOR QUICK COMMANDS (< 10 seconds):**
+**CRITICAL: ALWAYS USE wait=false:**
 ```
-STEP 1: Launch command with wait=true
-  launch-process: echo "START: quick command" && ls -la 2>&1 && echo "END: quick command"
-  wait=true, max_wait_seconds=10
-
-STEP 2: Output is in tool result <output> section
-  Read it directly from there
-  DO NOT call read-terminal or read-process
-
-STEP 3: Reason about results
-```
-
-**CRITICAL: WHEN TO USE wait=true vs wait=false:**
-```
-IF command is expected to complete quickly (< 10 seconds) THEN
-    Use wait=true
-    Output will be in tool result <output> section
-    Read it directly from there
-END IF
-
-IF command might take a long time (git commit, git push, docker build, etc.) THEN
-    Use wait=false
+FOR ALL COMMANDS:
+    ALWAYS use wait=false
     Process runs in background
-    MUST use read-process with terminal_id to get output
+    ALWAYS use read-process with terminal_id to get output
     This PREVENTS TIMEOUTS and gives you FULL OUTPUT
-END IF
+
+NEVER use wait=true - it causes timeouts and provides no output
 ```
 
 **BEFORE reasoning about ANY command output:**
