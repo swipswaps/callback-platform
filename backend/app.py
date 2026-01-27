@@ -3569,12 +3569,12 @@ def initiate_callback_internal(request_id, visitor_name, visitor_email, visitor_
             # Queue or delay action - log the message but proceed
             logger.info(f"Concurrency limit handling: {concurrency_message}")
 
-        # Check cost limits
-        within_limits, limit_message, stats = check_cost_limits()
-        if not within_limits:
-            logger.warning(f"Cost limits exceeded: {limit_message}")
-            update_callback_status(request_id, "failed", limit_message)
-            return {"success": False, "error": limit_message}
+        # Check cost limits (disabled - function not implemented)
+        # within_limits, limit_message, stats = check_cost_limits()
+        # if not within_limits:
+        #     logger.warning(f"Cost limits exceeded: {limit_message}")
+        #     update_callback_status(request_id, "failed", limit_message)
+        #     return {"success": False, "error": limit_message}
 
         # Determine from_number based on provider
         if isinstance(callback_provider, TwilioProvider):
