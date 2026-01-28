@@ -437,18 +437,21 @@ async function verifyCode() {
     return;
   }
 
+  // Set flag IMMEDIATELY to prevent race condition
+  isVerifying = true;
+  console.log('[AUTO-VERIFY DEBUG] isVerifying flag set to true');
+
   const code = verificationCodeInput.value.trim();
   console.log('[AUTO-VERIFY DEBUG] Code value:', code, 'length:', code.length);
 
   if (!code || code.length !== 6) {
     console.log('[AUTO-VERIFY DEBUG] Validation failed - code length not 6');
     showStatus('error', 'Please enter a 6-digit verification code');
+    isVerifying = false; // Reset flag since we're not proceeding
     return;
   }
 
   console.log('[AUTO-VERIFY DEBUG] Validation passed, proceeding with verification...');
-
-  isVerifying = true; // Set flag to prevent re-entry
 
   try {
     showStatus('info', '🔍 Verifying code...');
