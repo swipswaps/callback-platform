@@ -36,6 +36,7 @@ const codeTimerEl = document.getElementById("code-timer");
 let currentRequestId = null;
 let verificationTimer = null;
 let resendCooldown = null;
+let isVerifying = false; // Prevent multiple simultaneous verification attempts
 
 // Logging utility
 function log(level, message, data = {}) {
@@ -382,6 +383,7 @@ function showVerificationUI(phone) {
   verificationPhoneEl.textContent = phone;
   verificationCodeInput.value = '';
   verificationCodeInput.focus();
+  isVerifying = false; // Reset verification flag for new verification flow
 }
 
 function hideVerificationUI() {
@@ -390,6 +392,7 @@ function hideVerificationUI() {
   verificationSection.style.display = 'none';
   currentRequestId = null;
   stopVerificationTimer();
+  isVerifying = false; // Reset verification flag
 }
 
 function startVerificationTimer() {
@@ -427,6 +430,13 @@ function stopVerificationTimer() {
 
 async function verifyCode() {
   console.log('[AUTO-VERIFY DEBUG] verifyCode() called!');
+
+  // Prevent multiple simultaneous verification attempts
+  if (isVerifying) {
+    console.log('[AUTO-VERIFY DEBUG] Already verifying, skipping duplicate call');
+    return;
+  }
+
   const code = verificationCodeInput.value.trim();
   console.log('[AUTO-VERIFY DEBUG] Code value:', code, 'length:', code.length);
 
@@ -437,6 +447,8 @@ async function verifyCode() {
   }
 
   console.log('[AUTO-VERIFY DEBUG] Validation passed, proceeding with verification...');
+
+  isVerifying = true; // Set flag to prevent re-entry
 
   try {
     showStatus('info', '🔍 Verifying code...');
@@ -460,15 +472,19 @@ async function verifyCode() {
 
       // Step 3: Initiate the actual callback
       await initiateCallback(currentRequestId);
+      // Note: isVerifying flag is NOT reset here because we don't want duplicate verifications
+      // It will be reset when the user starts a new callback request
     } else {
       log('error', 'Verification failed', { error: data.error });
       showStatus('error', data.error || 'Invalid verification code');
       verifyBtn.disabled = false;
+      isVerifying = false; // Reset flag on error so user can retry
     }
   } catch (err) {
     log('error', 'Network error during verification', { error: err.message });
     showStatus('error', 'Network error. Please try again.');
     verifyBtn.disabled = false;
+    isVerifying = false; // Reset flag on error so user can retry
   }
 }
 
