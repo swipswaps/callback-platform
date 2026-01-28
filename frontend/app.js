@@ -231,9 +231,9 @@ function autofill(user) {
 // Status display function
 function showStatus(type, message) {
   statusEl.className = `status-message ${type}`;
-  statusEl.textContent = message;
+  statusEl.innerHTML = message;
   statusEl.style.display = 'block';
-  
+
   log('info', `Status shown: ${type}`, { message });
 }
 
@@ -332,12 +332,8 @@ form.addEventListener("submit", async (e) => {
     } else {
       log('error', 'Callback request failed', { error: data.error });
 
-      // Check if this is a duplicate request error with cancel option
-      if (res.status === 429 && data.can_cancel && data.existing_request_id) {
-        showDuplicateRequestError(data);
-      } else {
-        showStatus('error', data.error || 'Failed to submit callback request');
-      }
+      // Show error message (duplicate requests are now auto-cancelled by backend)
+      showStatus('error', data.error || 'Failed to submit callback request');
 
       // Reset reCAPTCHA on error so user can retry
       grecaptcha.reset();
@@ -522,66 +518,7 @@ async function resendVerificationCode() {
   }, 1000);
 }
 
-// Duplicate request error handling
-function showDuplicateRequestError(data) {
-  const { error, existing_request_id, remaining_minutes } = data;
-
-  const minutes = Math.ceil(remaining_minutes);
-  const timeText = minutes === 1 ? '1 minute' : `${minutes} minutes`;
-
-  const errorHtml = `
-    <div class="duplicate-request-error">
-      <p><strong>⏳ ${error}</strong></p>
-      <p>You can retry in approximately ${timeText}.</p>
-      <p>Or you can cancel your pending request and submit a new one:</p>
-      <button id="cancel-pending-request" class="btn btn-warning">
-        ❌ Cancel Pending Request
-      </button>
-    </div>
-  `;
-
-  showStatus('error', errorHtml);
-
-  // Add event listener to cancel button
-  setTimeout(() => {
-    const cancelBtn = document.getElementById('cancel-pending-request');
-    if (cancelBtn) {
-      cancelBtn.addEventListener('click', async () => {
-        await cancelPendingRequest(existing_request_id);
-      });
-    }
-  }, 100);
-}
-
-async function cancelPendingRequest(requestId) {
-  try {
-    showStatus('info', '🔄 Cancelling pending request...');
-
-    const res = await fetch(`${API_BASE_URL}/cancel_request`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ request_id: requestId })
-    });
-
-    const data = await res.json();
-
-    if (data.success) {
-      log('info', 'Pending request cancelled', { requestId });
-      showStatus('success', '✅ Request cancelled. You can now submit a new request.');
-
-      // Clear the form to allow resubmission
-      setTimeout(() => {
-        statusDiv.style.display = 'none';
-      }, 3000);
-    } else {
-      log('error', 'Failed to cancel request', { error: data.error });
-      showStatus('error', data.error || 'Failed to cancel request');
-    }
-  } catch (err) {
-    log('error', 'Network error during cancel', { error: err.message });
-    showStatus('error', 'Network error. Please try again.');
-  }
-}
+// Note: Duplicate request handling removed - backend now auto-cancels old requests
 
 // Event listeners for verification
 verifyBtn.addEventListener('click', verifyCode);

@@ -2647,20 +2647,36 @@ def request_callback():
             return jsonify(success=False, error=limit_message), 503  # 503 Service Unavailable
 
         # SECURITY LAYER 4: Check for duplicate requests (same phone number)
+        # Auto-cancel old request if user submits a new one (better UX)
         is_duplicate, dup_message, existing_id, remaining_minutes = check_duplicate_request(visitor_phone, time_window_minutes=60)
         if is_duplicate:
-            log_audit_event(existing_id, "duplicate_request_blocked", {
-                "remote_addr": request.remote_addr,
-                "visitor_phone": visitor_phone,
-                "remaining_minutes": remaining_minutes
-            })
-            return jsonify(
-                success=False,
-                error=dup_message,
-                existing_request_id=existing_id,
-                remaining_minutes=int(remaining_minutes),
-                can_cancel=True
-            ), 429  # 429 Too Many Requests
+            # Auto-cancel the old request
+            try:
+                conn = sqlite3.connect(DATABASE_PATH)
+                cursor = conn.cursor()
+
+                cursor.execute("""
+                    UPDATE callbacks
+                    SET request_status = 'cancelled',
+                        status_message = 'Auto-cancelled: user submitted new request',
+                        updated_at = ?
+                    WHERE request_id = ?
+                """, (datetime.utcnow().isoformat(), existing_id))
+
+                conn.commit()
+                conn.close()
+
+                logger.info(f"Auto-cancelled old request {existing_id} for {visitor_phone} - user submitted new request")
+                log_audit_event(existing_id, "auto_cancelled_on_new_request", {
+                    "remote_addr": request.remote_addr,
+                    "visitor_phone": visitor_phone
+                })
+
+                # Continue processing the new request (don't return error)
+
+            except Exception as e:
+                logger.error(f"Error auto-cancelling old request: {str(e)}")
+                # If auto-cancel fails, still allow the new request (fail open for better UX)
 
         # SECURITY LAYER 5: Generate and check request fingerprint
         ip_address = request.remote_addr
