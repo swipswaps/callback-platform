@@ -476,10 +476,29 @@ To prevent abuse and ensure quality service, visitors must sign in before reques
 3. **After sign-in**: Form appears with auto-filled details
 4. **Enter your phone number** (required)
 5. **Click "Request Callback Now"**
-6. **Answer your phone** when it rings (usually within 10-20 seconds)
-7. **You'll be connected** to the business automatically
+6. **Enter the 6-digit verification code** sent to your phone
+   - **Auto-verify**: Code is automatically verified when you finish typing the 6th digit
+   - No need to click "Verify" button - just type the code!
+   - If you make a mistake, you can still click "Verify" manually or retype the code
+7. **Answer your phone** when it rings (usually within 10-20 seconds)
+8. **You'll be connected** to the business automatically
 
 **Privacy**: Your OAuth data is only used to auto-fill the form. We never share your information.
+
+#### Auto-Verify Feature
+
+The platform includes an intelligent auto-verify feature that improves user experience:
+
+- **Automatic verification**: When you type the 6th digit of your verification code, the system automatically verifies it without requiring you to click the "Verify" button
+- **Race condition protection**: Built-in safeguards prevent duplicate verification attempts, ensuring smooth operation
+- **Fallback options**: You can still use the "Verify" button or press Enter if you prefer manual verification
+- **Error prevention**: The system prevents multiple simultaneous verification attempts that could cause confusion
+
+**Technical Details** (for administrators):
+- Uses `keyup` event listener for reliable cross-browser compatibility
+- Implements `isVerifying` flag to prevent race conditions
+- Comprehensive debug logging for troubleshooting (visible in browser console)
+- Graceful error handling with user-friendly messages
 
 ---
 
