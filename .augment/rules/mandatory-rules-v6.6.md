@@ -110,7 +110,7 @@ launch-process:
 
 ---
 
-## RULE 9 — MANDATORY LOG REVIEW
+## RULE 9 — MANDATORY OUTPUT READING (ZERO EXCEPTIONS)
 
 Logs must be reviewed before reasoning or fixes.
 
@@ -118,26 +118,48 @@ Logs must be reviewed before reasoning or fixes.
 
 **THE ONLY PATTERN:**
 
-Call `launch-process` with `wait=true` → output in tool result <output> section
+Call `launch-process` with `wait=true` → output in tool result <output> section → **MUST READ AND QUOTE IT**
 
 **THAT'S IT. ONE STEP.**
 
-**CRITICAL: Use wait=true**
+**CRITICAL: Use wait=true AND READ OUTPUT EVERY TIME**
 
 - AI ALWAYS runs commands using `wait=true` for launch-process
 - Output appears in user's VISIBLE terminal (they can see it)
-- Output is ALSO in tool result <output> section - READ IT
+- Output is ALSO in tool result <output> section - **MUST READ IT EVERY TIME**
 - NEVER use `wait=false` - creates HIDDEN terminals user can't see
 - NEVER call `read-process` - AI-only hidden tool (user can't see output)
 - NEVER call `list-processes` - AI-only hidden tool (user can't see output)
 - NEVER ask user to run commands - exponentially increases error chance
 - EXCEPTION: `read-terminal` for user's spontaneous terminal activity
 - NEVER use tee - not needed, output already visible
-- Set max_wait_seconds high enough (600 = 10 minutes for long commands)
+- Set max_wait_seconds=3 for most commands (per instructions.md line 12)
 
-**If command times out:**
-- Partial output is still in tool result <output> section
-- READ IT - don't call additional commands to check results
+**AFTER EVERY launch-process call, assistant MUST:**
+1. Check if <output> section exists in tool result
+2. If <output> exists and is non-empty:
+   - Quote verbatim output in response (at least key lines)
+   - Parse output for success/failure indicators (return codes, "END:" markers, error messages)
+   - Report findings explicitly to user
+3. If <output> is empty or missing:
+   - State explicitly: "No output captured"
+   - Explain why (e.g., command failed immediately before producing output)
+4. If tool returns <error>Cancelled by user.</error> or timeout:
+   - **STILL read <output> section** (partial output is there)
+   - Quote what was captured before timeout
+   - Report partial results
+
+**FORBIDDEN (ZERO TOLERANCE):**
+- ❌ Ignoring <output> section when it exists
+- ❌ Saying "OK" without reading output
+- ❌ Saying "the command timed out" without reading partial output
+- ❌ Assuming failure without checking output
+- ❌ Calling additional commands to check results (output already in tool result)
+
+**VIOLATION PENALTY:**
+- Immediate halt - user must manually show output that was already available
+- Wastes user's turn and money
+- Breach of contract - assistant's job is to read output, not make user do it
 
 ---
 

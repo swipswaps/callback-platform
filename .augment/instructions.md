@@ -26,14 +26,14 @@ Before EVERY response, the agent MUST:
 
 ## HARD STOPS (Immediate Halt Required)
 
-### 🔴 RULE 9 VIOLATION DETECTOR - ALWAYS USE wait=true
+### 🔴 RULE 9 VIOLATION DETECTOR - MANDATORY OUTPUT READING (ZERO EXCEPTIONS)
 
 **PROVEN FACT: launch-process with wait=true runs in user's VISIBLE terminal**
 
 Evidence: ps -p $$ shows same PID/TTY as user's terminal
 
 **CRITICAL: ALL commands MUST use wait=true**
-**CRITICAL: Output is in tool result <output> section - READ IT**
+**CRITICAL: Output is in tool result <output> section - MUST READ IT EVERY TIME**
 **CRITICAL: NEVER use wait=false - creates hidden background terminals**
 
 **MANDATORY PATTERN:**
@@ -44,35 +44,52 @@ launch-process:
   max_wait_seconds: 3
   cwd: /home/owner/Documents/696d62a9-9c68-832a-b5af-a90eb5243316
 
-Tool returns output in <output> section - READ IT
+Tool returns output in <output> section - MUST READ IT AND QUOTE IT
 ```
 
-**FORBIDDEN PATTERNS:**
+**AFTER EVERY launch-process call, assistant MUST:**
+```
+1. Check if <output> section exists in tool result
+2. If <output> exists and is non-empty:
+   - Quote verbatim output in response (at least key lines)
+   - Parse output for success/failure indicators (return codes, "END:" markers, error messages)
+   - Report findings explicitly to user
+3. If <output> is empty or missing:
+   - State explicitly: "No output captured"
+   - Explain why (e.g., command failed immediately before producing output)
+4. If tool returns <error>Cancelled by user.</error> or timeout:
+   - STILL read <output> section (partial output is there)
+   - Quote what was captured before timeout
+   - Report partial results
+```
+
+**FORBIDDEN PATTERNS (ZERO TOLERANCE):**
+❌ Ignoring <output> section when it exists
+❌ Saying "OK" without reading output
+❌ Saying "the command timed out" without reading partial output
+❌ Assuming failure without checking output
 ❌ Using wait=false (creates hidden terminals user can't see)
 ❌ Calling read-process (AI-only hidden tool - user can't see output)
 ❌ Calling list-processes (AI-only hidden tool - user can't see output)
 ❌ Asking user to run commands (increases error chance)
 ❌ Using tee (not needed)
 ❌ Calling git status/log to check results (output already there)
-✅ CORRECT: AI runs command with wait=true, max_wait_seconds=3, reads <output> section
-✅ CORRECT: read-terminal only for reading user's spontaneous terminal activity
 
-**Violation Example:**
+**CORRECT EXAMPLES:**
 ```
-❌ BAD: Using wait=false (creates hidden terminals)
-❌ BAD: Calling read-process (AI-only hidden tool)
-❌ BAD: Calling list-processes (AI-only hidden tool)
-❌ BAD: Asking user to run commands (increases error chance)
-❌ BAD: Calling git status to check results (output already in tool result)
+✅ Tool returns with <output> containing "END: git push" → Quote output, confirm success
+✅ Tool returns with <error>Cancelled by user.</error> → Read <output> section, quote partial output
+✅ Tool returns with <output> containing error message → Quote error, diagnose problem
+✅ Tool returns with empty <output> → State "No output captured, command may have failed immediately"
+✅ git commit with wait=true → read <output> section → quote commit hash or error
+✅ git push with wait=true → read <output> section → quote "To https://..." or error
+✅ docker build with wait=true → read <output> section → quote build success/failure
+```
 
-✅ CORRECT: AI runs launch-process with wait=true, max_wait_seconds=3
-✅ CORRECT: AI reads output from <output> section in tool result
-✅ CORRECT: read-terminal only for user's spontaneous terminal activity
-✅ CORRECT: git commit with wait=true → read <output> section → see "END: git commit"
-✅ CORRECT: git push with wait=true → read <output> section → see "END: git push"
-✅ CORRECT: docker build with wait=true → read <output> section → see build logs
-✅ CORRECT: ls -la with wait=true → read <output> section → see file list
-```
+**VIOLATION PENALTY:**
+- Immediate halt - user must manually show output that was already available
+- Wastes user's turn and money
+- Breach of contract - assistant's job is to read output, not make user do it
 
 ### 🔴 RULE 8 VIOLATION DETECTOR
 
