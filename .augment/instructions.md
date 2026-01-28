@@ -247,7 +247,66 @@ IF any ❌ FAIL detected:
 
 ---
 
-## 🚀 DEPLOYED SYSTEMS PROTOCOL (v6.6)
+## 🔒 LOCAL VERIFICATION PRECEDENCE (MANDATORY - HARD STOP)
+
+**Status:** Authoritative
+**Overrides:** All workflow acceleration behaviors
+**Applies to:** All code changes, including frontend-only changes
+
+### RULE LV-1 — No Push Without Local Execution
+
+An assistant MUST NOT commit or push any change unless **local execution has occurred** and **observable results are reported**.
+
+**"Local execution" means at least one of:**
+- Running the application
+- Triggering the modified code path
+- Producing stdout / stderr logs
+- Demonstrating the behavior change in runtime terms
+
+**Mocking, reasoning, or "this should work" does NOT qualify.**
+
+### RULE LV-2 — Evidence Before State Advancement
+
+Before advancing state from: **edited → committed → pushed → deployed**
+
+The assistant MUST present evidence in one of the following forms:
+- ✅ Verbatim console output
+- ✅ Browser runtime observation
+- ✅ Test runner output
+- ✅ Explicit failure logs (if broken)
+
+**Assertions without evidence are INVALID.**
+
+### RULE LV-3 — Deployment ≠ Validation
+
+**Deployment is NOT validation.**
+
+Testing after deployment does NOT satisfy correctness requirements if:
+- The code could have been executed locally
+- The failure would be detectable locally
+- The change affects user interaction or control flow
+
+### RULE LV-4 — Ambiguity Resolution
+
+If any rule appears to allow **pushing before testing**, that interpretation is **INVALID by default**.
+
+In conflicts between:
+- Workflow speed
+- Engineering safety
+
+**Engineering safety ALWAYS wins.**
+
+### RULE LV-5 — No Retroactive Justification
+
+An assistant MUST NOT:
+- ❌ Take an action first
+- ❌ Then search rules to justify it
+
+**All rule justification must occur BEFORE irreversible actions are proposed.**
+
+---
+
+## 🚀 DEPLOYED SYSTEMS PROTOCOL (v6.7)
 
 **CRITICAL: When modifying deployed systems, deployment is PART OF THE TASK, not optional.**
 
@@ -260,27 +319,31 @@ IF .github/workflows/deploy-pages.yml exists THEN
 END IF
 ```
 
-### Atomic Deployment Checklist:
+### Atomic Deployment Checklist (CORRECTED):
 ```
 1. ✅ Update all code (backend + frontend)
 2. ✅ Rebuild all containers (docker compose down && docker compose up --build -d)
-3. ✅ Commit changes (git add ... && git commit -m "...")
-4. ✅ Push to trigger deployment (git push origin main)
-5. ✅ Verify deployment (check GitHub Actions, wait 1-2 min for Pages rebuild)
-6. ✅ Test end-to-end (verify user flow works)
-7. ✅ THEN report completion
+3. ✅ TEST LOCALLY - Run application, verify behavior, capture evidence (MANDATORY)
+4. ✅ Commit changes (git add ... && git commit -m "...")
+5. ✅ Push to trigger deployment (git push origin main)
+6. ✅ Verify deployment (check GitHub Actions, wait 1-2 min for Pages rebuild)
+7. ✅ Test end-to-end in production (verify user flow works)
+8. ✅ THEN report completion
 ```
 
 ### Rule 15 Violation Example:
 ```
+❌ BAD: Update backend → Rebuild Docker → Update frontend → Commit → Push (NO LOCAL TEST)
+        Result: Pushed broken code to production
+
 ❌ BAD: Update backend → Rebuild Docker → Update frontend → Ask "Should I deploy?"
         Result: Backend expects new flow, frontend doesn't know about it = BROKEN SYSTEM
 
-✅ GOOD: Update backend → Rebuild Docker → Update frontend → Commit → Push → Verify → Test → Report
-        Result: All components in sync, system works end-to-end
+✅ GOOD: Update backend → Rebuild Docker → Update frontend → TEST LOCALLY → Commit → Push → Verify → Test → Report
+        Result: All components in sync, verified locally first, system works end-to-end
 ```
 
-**Rationale:** Auto-deployment systems (GitHub Pages, Vercel, Netlify) make `git push` a deployment step, not just version control. Stopping before push violates Rule 15 (Zero-Hang Guarantee) by leaving the system in a broken state.
+**Rationale:** Auto-deployment systems (GitHub Pages, Vercel, Netlify) make `git push` a deployment step, not just version control. But LOCAL TESTING ALWAYS comes before push. Never push untested code.
 
 ---
 

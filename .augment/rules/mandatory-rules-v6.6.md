@@ -185,12 +185,37 @@ Runtime changes require logs, verification, and confirmation.
 - Docker workflows must include pre-checks for required commands (`docker` vs `docker-compose`), environment variables, and rebuild necessity.
 - Logs must capture container startup, rebuild, and environment load verification.
 
-**v6.6 Addendum - Deployed Systems Protocol:**
+**v6.7 Addendum - LOCAL VERIFICATION PRECEDENCE (HARD STOP):**
+
+**RULE LV-1 — No Push Without Local Execution**
+- Assistant MUST NOT commit or push any change unless local execution has occurred and observable results are reported.
+- "Local execution" means: running the application, triggering the modified code path, producing stdout/stderr logs, or demonstrating the behavior change in runtime terms.
+- Mocking, reasoning, or "this should work" does NOT qualify.
+
+**RULE LV-2 — Evidence Before State Advancement**
+- Before advancing state from: edited → committed → pushed → deployed
+- Assistant MUST present evidence: verbatim console output, browser runtime observation, test runner output, or explicit failure logs.
+- Assertions without evidence are INVALID.
+
+**RULE LV-3 — Deployment ≠ Validation**
+- Deployment is NOT validation.
+- Testing after deployment does NOT satisfy correctness requirements if the code could have been executed locally, the failure would be detectable locally, or the change affects user interaction or control flow.
+
+**RULE LV-4 — Ambiguity Resolution**
+- If any rule appears to allow pushing before testing, that interpretation is INVALID by default.
+- In conflicts between workflow speed and engineering safety, engineering safety ALWAYS wins.
+
+**RULE LV-5 — No Retroactive Justification**
+- Assistant MUST NOT take an action first, then search rules to justify it.
+- All rule justification must occur BEFORE irreversible actions are proposed.
+
+**v6.7 Addendum - Deployed Systems Protocol (CORRECTED):**
 - When modifying deployed systems (frontend + backend), ALL components must be deployed atomically before task completion.
 - If GitHub Pages auto-deployment is configured (`.github/workflows/deploy-pages.yml`), changes MUST be committed and pushed to trigger deployment.
-- A task involving deployed systems is NOT complete until: (1) all code updated, (2) all containers rebuilt, (3) all changes committed and pushed, (4) deployment verified, (5) end-to-end tested.
+- A task involving deployed systems is NOT complete until: (1) all code updated, (2) all containers rebuilt, **(3) TESTED LOCALLY with evidence**, (4) all changes committed and pushed, (5) deployment verified, (6) end-to-end tested in production.
 - Never leave a system in a broken state where backend and frontend are out of sync.
 - Git push is a DEPLOYMENT STEP when auto-deployment exists, not optional version control.
+- **LOCAL TESTING ALWAYS comes before push. Never push untested code.**
 
 ---
 
