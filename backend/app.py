@@ -20,6 +20,7 @@ import logging
 import uuid
 import requests
 import secrets
+import time
 from datetime import datetime, timedelta
 from flask import Flask, request, redirect, jsonify
 from flask_cors import CORS
@@ -34,6 +35,8 @@ import phonenumbers
 import pytz
 from datetime import time as dt_time
 from prometheus_client import Counter, Gauge, Histogram, generate_latest, CONTENT_TYPE_LATEST
+from requests.exceptions import ConnectionError, Timeout
+from urllib3.exceptions import NameResolutionError
 
 # Configure comprehensive logging per Rule 25
 LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s | %(funcName)s | %(message)s"
@@ -330,7 +333,7 @@ class TwilioProvider(CallbackProvider):
             self.logger.warning("Twilio credentials not configured")
 
     def make_call(self, to_number, from_number, request_id):
-        """Initiate Twilio call to business number"""
+        """Initiate Twilio call to business number with self-healing retry logic"""
         if not self.client:
             self.logger.error("Twilio client not initialized")
             return {'success': False, 'call_sid': None, 'message': 'Twilio not configured'}
@@ -338,24 +341,30 @@ class TwilioProvider(CallbackProvider):
         try:
             self.logger.info(f"Initiating Twilio call for request {request_id}: {from_number} -> {to_number}")
 
-            call = self.client.calls.create(
-                to=to_number,
-                from_=from_number,
-                url=f"http://twimlets.com/holdmusic?Bucket=com.twilio.music.classical",
-                status_callback=f"https://api.swipswaps.com/twilio/status_callback?request_id={request_id}",
-                status_callback_event=["completed", "no-answer", "busy", "failed"],
-                timeout=20
+            # Wrap Twilio API call with exponential backoff retry
+            call = retry_with_exponential_backoff(
+                lambda: self.client.calls.create(
+                    to=to_number,
+                    from_=from_number,
+                    url=f"http://twimlets.com/holdmusic?Bucket=com.twilio.music.classical",
+                    status_callback=f"https://api.swipswaps.com/twilio/status_callback?request_id={request_id}",
+                    status_callback_event=["completed", "no-answer", "busy", "failed"],
+                    timeout=20
+                ),
+                max_retries=3,
+                base_delay=1,
+                max_delay=5
             )
 
             self.logger.info(f"Twilio call initiated successfully: {call.sid}")
             return {'success': True, 'call_sid': call.sid, 'message': 'Call initiated'}
 
-        except TwilioRestException as e:
-            self.logger.error(f"Twilio call failed: {str(e)}")
-            return {'success': False, 'call_sid': None, 'message': str(e)}
+        except (TwilioRestException, ConnectionError, Timeout, NameResolutionError) as e:
+            self.logger.error(f"Twilio call failed after retries: {str(e)}")
+            return {'success': False, 'call_sid': None, 'message': f"Call failed after retries: {str(e)}"}
 
     def send_sms(self, to_number, from_number, message):
-        """Send SMS via Twilio"""
+        """Send SMS via Twilio with self-healing retry logic"""
         if not self.client:
             self.logger.error("Twilio client not initialized")
             return {'success': False, 'sms_sid': None, 'message': 'Twilio not configured'}
@@ -363,18 +372,24 @@ class TwilioProvider(CallbackProvider):
         try:
             self.logger.info(f"Sending Twilio SMS: {from_number} -> {to_number}")
 
-            msg = self.client.messages.create(
-                to=to_number,
-                from_=from_number,
-                body=message
+            # Wrap Twilio API call with exponential backoff retry
+            msg = retry_with_exponential_backoff(
+                lambda: self.client.messages.create(
+                    to=to_number,
+                    from_=from_number,
+                    body=message
+                ),
+                max_retries=3,
+                base_delay=1,
+                max_delay=5
             )
 
             self.logger.info(f"Twilio SMS sent successfully: {msg.sid}")
             return {'success': True, 'sms_sid': msg.sid, 'message': 'SMS sent'}
 
-        except TwilioRestException as e:
-            self.logger.error(f"Twilio SMS failed: {str(e)}")
-            return {'success': False, 'sms_sid': None, 'message': str(e)}
+        except (TwilioRestException, ConnectionError, Timeout, NameResolutionError) as e:
+            self.logger.error(f"Twilio SMS failed after retries: {str(e)}")
+            return {'success': False, 'sms_sid': None, 'message': f"SMS failed after retries: {str(e)}"}
 
     def is_configured(self):
         """Check if Twilio is configured"""
@@ -1256,6 +1271,46 @@ def init_database():
     logger.info("Database initialized successfully")
 
 
+def retry_with_exponential_backoff(func, max_retries=3, base_delay=1, max_delay=10):
+    """
+    Retry a function with exponential backoff for network/DNS errors.
+
+    Self-healing pattern for Twilio API calls that may fail due to:
+    - DNS resolution errors
+    - Network connectivity issues
+    - Temporary API outages
+
+    Args:
+        func: Function to retry (should be a lambda or callable)
+        max_retries: Maximum number of retry attempts (default: 3)
+        base_delay: Initial delay in seconds (default: 1)
+        max_delay: Maximum delay in seconds (default: 10)
+
+    Returns:
+        Result of func() if successful
+
+    Raises:
+        Last exception if all retries exhausted
+    """
+    for attempt in range(max_retries + 1):
+        try:
+            return func()
+        except (ConnectionError, Timeout, NameResolutionError, TwilioRestException) as e:
+            if attempt == max_retries:
+                # Last attempt failed - re-raise
+                logger.error(f"All {max_retries} retry attempts exhausted: {str(e)}")
+                raise
+
+            # Calculate exponential backoff delay
+            delay = min(base_delay * (2 ** attempt), max_delay)
+
+            logger.warning(f"Attempt {attempt + 1}/{max_retries + 1} failed: {str(e)}. Retrying in {delay}s...")
+            time.sleep(delay)
+
+    # Should never reach here, but just in case
+    raise Exception("Retry logic error")
+
+
 def generate_verification_code():
     """Generate a 6-digit verification code using cryptographically secure random."""
     return ''.join([str(secrets.randbelow(10)) for _ in range(6)])
@@ -1324,7 +1379,7 @@ def send_sms_verification(request_id, phone, visitor_name):
         conn.commit()
         conn.close()
 
-        # Send SMS via Twilio
+        # Send SMS via Twilio with retry logic (self-healing)
         if not twilio_client:
             logger.error("Twilio client not configured")
             return False, None, "SMS service not configured"
@@ -1332,11 +1387,22 @@ def send_sms_verification(request_id, phone, visitor_name):
         # Keep message short to fit in 1 segment (including trial prefix)
         message = f"Your verification code is: {code}. Valid for 10 minutes."
 
-        sms = twilio_client.messages.create(
-            to=phone,
-            from_=TWILIO_NUMBER,
-            body=message
-        )
+        # Wrap Twilio API call with exponential backoff retry
+        try:
+            sms = retry_with_exponential_backoff(
+                lambda: twilio_client.messages.create(
+                    to=phone,
+                    from_=TWILIO_NUMBER,
+                    body=message
+                ),
+                max_retries=3,
+                base_delay=1,
+                max_delay=5
+            )
+        except Exception as retry_error:
+            # All retries exhausted - return error
+            logger.error(f"Failed to send SMS after retries: {str(retry_error)}")
+            return False, None, f"SMS delivery failed after retries: {str(retry_error)}"
 
         # Increment Prometheus metrics
         verification_codes_sent.labels(channel='sms').inc()
