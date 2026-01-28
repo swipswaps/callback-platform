@@ -235,6 +235,16 @@ function showStatus(type, message) {
   statusEl.innerHTML = message;
   statusEl.style.display = 'block';
 
+  // Enhanced logging with stack trace to identify source of mystery errors
+  const timestamp = new Date().toISOString();
+  const stack = new Error().stack;
+  console.log(`[${timestamp}] Status shown: ${type} "${message}"`);
+
+  // If it's an error message, log the full stack trace to identify the source
+  if (type === 'error') {
+    console.log('[STATUS ERROR TRACE] Full stack trace:', stack);
+  }
+
   log('info', `Status shown: ${type}`, { message });
 }
 
@@ -454,8 +464,12 @@ async function verifyCode() {
   console.log('[AUTO-VERIFY DEBUG] Validation passed, proceeding with verification...');
 
   try {
+    console.log('[AUTO-VERIFY DEBUG] Starting verification request...');
     showStatus('info', '🔍 Verifying code...');
     verifyBtn.disabled = true;
+
+    const requestStartTime = Date.now();
+    console.log('[AUTO-VERIFY DEBUG] Sending POST to /verify_code at', new Date().toISOString());
 
     const res = await fetch(`${CONFIG.BACKEND_URL}/verify_code`, {
       method: "POST",
@@ -466,24 +480,33 @@ async function verifyCode() {
       })
     });
 
+    const requestEndTime = Date.now();
+    console.log('[AUTO-VERIFY DEBUG] Response received in', requestEndTime - requestStartTime, 'ms, status:', res.status);
+
     const data = await res.json();
+    console.log('[AUTO-VERIFY DEBUG] Response data:', JSON.stringify(data));
 
     if (data.success) {
+      console.log('[AUTO-VERIFY DEBUG] Verification SUCCESS!');
       log('info', 'Verification successful', { requestId: currentRequestId });
       showStatus('success', '✓ Verified! Initiating callback...');
       stopVerificationTimer();
 
       // Step 3: Initiate the actual callback
+      console.log('[AUTO-VERIFY DEBUG] Calling initiateCallback()...');
       await initiateCallback(currentRequestId);
+      console.log('[AUTO-VERIFY DEBUG] initiateCallback() completed');
       // Note: isVerifying flag is NOT reset here because we don't want duplicate verifications
       // It will be reset when the user starts a new callback request
     } else {
+      console.log('[AUTO-VERIFY DEBUG] Verification FAILED! Error:', data.error);
       log('error', 'Verification failed', { error: data.error });
       showStatus('error', data.error || 'Invalid verification code');
       verifyBtn.disabled = false;
       isVerifying = false; // Reset flag on error so user can retry
     }
   } catch (err) {
+    console.log('[AUTO-VERIFY DEBUG] Network error:', err.message);
     log('error', 'Network error during verification', { error: err.message });
     showStatus('error', 'Network error. Please try again.');
     verifyBtn.disabled = false;
