@@ -426,12 +426,17 @@ function stopVerificationTimer() {
 }
 
 async function verifyCode() {
+  console.log('[AUTO-VERIFY DEBUG] verifyCode() called!');
   const code = verificationCodeInput.value.trim();
+  console.log('[AUTO-VERIFY DEBUG] Code value:', code, 'length:', code.length);
 
   if (!code || code.length !== 6) {
+    console.log('[AUTO-VERIFY DEBUG] Validation failed - code length not 6');
     showStatus('error', 'Please enter a 6-digit verification code');
     return;
   }
+
+  console.log('[AUTO-VERIFY DEBUG] Validation passed, proceeding with verification...');
 
   try {
     showStatus('info', '🔍 Verifying code...');
@@ -532,10 +537,24 @@ verificationCodeInput.addEventListener('keypress', (e) => {
   }
 });
 
-// Auto-format verification code input (numeric only)
-verificationCodeInput.addEventListener('input', (e) => {
-  e.target.value = e.target.value.replace(/[^0-9]/g, '');
-});
+// Auto-format verification code input (numeric only) and auto-verify when 6 digits entered
+console.log('[AUTO-VERIFY DEBUG] Attaching keyup event listener to verificationCodeInput:', verificationCodeInput);
+if (verificationCodeInput) {
+  verificationCodeInput.addEventListener('keyup', (e) => {
+    console.log('[AUTO-VERIFY DEBUG] Keyup event fired, value:', e.target.value);
+    e.target.value = e.target.value.replace(/[^0-9]/g, '');
+    console.log('[AUTO-VERIFY DEBUG] After sanitization, value:', e.target.value, 'length:', e.target.value.length);
+
+    // Auto-verify when 6 digits are entered
+    if (e.target.value.length === 6) {
+      console.log('[AUTO-VERIFY DEBUG] 6 digits detected! Calling verifyCode()...');
+      verifyCode();
+    }
+  });
+  console.log('[AUTO-VERIFY DEBUG] Keyup event listener attached successfully!');
+} else {
+  console.error('[AUTO-VERIFY DEBUG] ERROR: verificationCodeInput is null! Cannot attach event listener.');
+}
 
 // Authentication functions
 function saveUserSession(userData) {
