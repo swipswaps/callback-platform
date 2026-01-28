@@ -67,3 +67,4 @@ Thumbs.db
 
 # Temporary files
 check_browser_console.py
+*.pyc
