@@ -163,6 +163,41 @@ Call `launch-process` with `wait=true` → output in tool result <output> sectio
 
 ---
 
+## RULE 9B — Tool Name Accuracy (ZERO TOLERANCE)
+
+**Before calling ANY tool, assistant MUST:**
+1. Verify tool name matches EXACTLY from system-provided tools list
+2. Check character-by-character: hyphens (-) vs underscores (_)
+3. Verify capitalization matches exactly
+4. Confirm all required parameters are present
+
+**Common errors:**
+- ❌ `str_replace-editor` (underscore) → ✅ `str-replace-editor` (hyphen)
+- ❌ `launch_process` (underscore) → ✅ `launch-process` (hyphen)
+- ❌ `codebase_retrieval` (underscore) → ✅ `codebase-retrieval` (hyphen)
+- ❌ `save_file` (underscore) → ✅ `save-file` (hyphen)
+- ❌ `web_search` (underscore) → ✅ `web-search` (hyphen)
+
+**Correct tool names (reference):**
+- ✅ `str-replace-editor` - Edit existing files
+- ✅ `save-file` - Create new files
+- ✅ `view` - Read files/directories
+- ✅ `launch-process` - Execute commands
+- ✅ `codebase-retrieval` - Search codebase
+- ✅ `web-search` - Search web
+- ✅ `web-fetch` - Fetch web pages
+
+**VIOLATION PENALTY:**
+- Tool call fails immediately
+- Wastes user's turn and money
+- Must retry with correct tool name
+- Reveals lack of attention to detail
+
+**RATIONALE:**
+Tool name typos (especially hyphen vs underscore) are common and preventable. Assistant must verify exact spelling before calling tools to avoid wasting user's time and money on failed tool calls.
+
+---
+
 ## RULE 10 — USER-MANDATED COMMAND AUTHORITY
 
 User-declared correct commands are mandatory.
