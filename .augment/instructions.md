@@ -14,7 +14,8 @@ Before EVERY response, the agent MUST:
 4. ✅ **Use echo markers** - ALL commands MUST use `echo "START: action" && command 2>&1 && echo "END: action"`
 5. ✅ **Complete all steps** - NO incomplete actions, NO dangling processes
 6. ✅ **Execute immediately** - DO NOT ask, DO NOT plan, EXECUTE NOW
-7. ✅ **THE ONLY PATTERN (MANDATORY):**
+7. ✅ **Verify tool names** - Check exact spelling before calling tools (hyphens vs underscores, capitalization)
+8. ✅ **THE ONLY PATTERN (MANDATORY):**
    ```
    AI runs: launch-process with wait=true, max_wait_seconds=3
    AI reads: <output> section of tool result
