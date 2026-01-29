@@ -502,46 +502,180 @@ The platform includes an intelligent auto-verify feature that improves user expe
 
 ---
 
-## �️ Security Features
+## 🛡️ Security & Cost Protection
 
-This platform includes **6 layers of security** to protect against abuse and fraud:
+This platform includes **comprehensive multi-layered security** to protect against abuse, resource exhaustion, and financial loss from external threats.
 
-### 1. CORS Restriction
+---
+
+### 🚨 Threat Model: What We're Protecting Against
+
+**External threats that could cause financial loss or resource exhaustion:**
+
+1. **Toll Fraud** - Attackers making expensive international calls
+2. **SMS Bombing** - Mass verification code requests to exhaust SMS credits
+3. **Call Flooding** - Overwhelming Twilio with concurrent calls
+4. **Distributed Attacks** - Coordinated abuse from multiple IPs
+5. **Bot Attacks** - Automated scripts submitting fake requests
+6. **Resource Exhaustion** - Depleting daily Twilio quotas
+7. **Cloudflare Bypass** - Direct API access attempts
+8. **Replay Attacks** - Reusing captured webhook requests
+
+---
+
+### 🔒 Security Layers (11 Protections)
+
+#### **Layer 1: Cloudflare Protection**
+- **DDoS mitigation** - Automatic protection against volumetric attacks
+- **WAF (Web Application Firewall)** - Blocks malicious requests before they reach the API
+- **Rate limiting at edge** - Cloudflare Tunnel provides first line of defense
+- **HTTPS enforcement** - All traffic encrypted in transit
+- **Geographic restrictions** (optional) - Block requests from high-risk countries
+
+#### **Layer 2: CORS Restriction**
 - Configured via `ALLOWED_ORIGINS` environment variable
 - Prevents unauthorized domains from accessing the API
 - Default: Restricts to your frontend domain only
+- **Protects against**: Cross-site request forgery (CSRF) from malicious websites
 
-### 2. Rate Limiting
-- **5 requests per minute** per IP address
-- **50 requests per hour** per IP address
-- **200 requests per day** per IP address
-- Prevents spam and DoS attacks
+#### **Layer 3: Rate Limiting (Flask-Limiter)**
+**Per-IP limits prevent resource exhaustion:**
+- **Callback requests**: 5/minute, 50/hour, 200/day
+- **Verification codes**: 10/minute (prevents SMS bombing)
+- **Status checks**: 60/minute (prevents polling abuse)
+- **Admin API**: 60/minute (prevents dashboard abuse)
 
-### 3. Phone Number Validation
-- E.164 format validation using `phonenumbers` library
+**Cost impact**: Limits maximum daily Twilio usage to ~200 SMS + 200 calls per IP
+
+#### **Layer 4: Daily Cost Limits**
+**Hard caps prevent runaway Twilio charges:**
+- `MAX_CALLS_PER_DAY` (default: 100) - Total voice calls allowed per day
+- `MAX_SMS_PER_DAY` (default: 200) - Total SMS messages allowed per day
+- **80% warning threshold** - Logs alert when approaching limits
+- **Automatic rejection** - Returns 503 Service Unavailable when limits reached
+
+**Example**: At 100 calls/day limit, maximum daily cost ≈ $13 (assuming $0.013/min × 10min avg)
+
+#### **Layer 5: Duplicate Request Prevention**
+**Prevents same phone number from spamming requests:**
+- **60-minute cooldown** per phone number
+- Auto-cancels old request if user submits new one (better UX)
+- Tracks request status: pending, calling, connected, verified
+- **Protects against**: Single user making repeated requests to exhaust resources
+
+#### **Layer 6: Request Fingerprinting**
+**Detects distributed attacks and sophisticated abuse:**
+- Generates SHA256 hash from: `IP + User-Agent + Phone Number`
+- **20 requests per fingerprint per 24 hours** maximum
+- Tracks patterns across IP changes (e.g., VPN hopping)
+- **Protects against**: Attackers rotating IPs to bypass rate limits
+
+**Example blocked attack**: Same phone number + browser from 50 different IPs = blocked after 20 requests
+
+#### **Layer 7: Phone Number Validation**
+- **E.164 format validation** using `phonenumbers` library
 - Rejects invalid or malformed phone numbers
-- Prevents toll fraud and abuse
+- **Prevents toll fraud** - Blocks premium-rate numbers (future enhancement)
+- **Sanitizes input** - Removes formatting characters before validation
 
-### 4. Twilio Webhook Signature Verification
-- Validates all Twilio callbacks using HMAC-SHA1
-- Prevents spoofed webhook attacks
-- Returns 403 Forbidden for invalid signatures
+#### **Layer 8: Concurrent Call Limits**
+**Prevents simultaneous call flooding:**
+- `MAX_CONCURRENT_CALLS` (default: 5) - Maximum simultaneous active calls
+- `MAX_CONCURRENT_SMS` (default: 10) - Maximum simultaneous SMS sends
+- **Overflow actions**: reject, queue, or delay excess requests
+- **Protects against**: Coordinated attacks launching 100+ calls simultaneously
 
-### 5. Google reCAPTCHA v2
+**Cost impact**: Limits maximum concurrent Twilio usage to prevent spike charges
+
+#### **Layer 9: Twilio Webhook Signature Verification**
+- Validates all Twilio callbacks using **HMAC-SHA1**
+- Prevents spoofed webhook requests
+- Returns **403 Forbidden** for invalid signatures
+- **Protects against**: Replay attacks and fake status updates
+
+**Technical detail**: Uses `X-Twilio-Signature` header + request URL + POST body
+
+#### **Layer 10: Google reCAPTCHA v2**
 - Prevents bot abuse and automated attacks
 - Required for all callback requests
 - Configurable via `RECAPTCHA_SECRET_KEY` and `RECAPTCHA_SITE_KEY`
+- **Protects against**: Scripted attacks submitting thousands of requests
 
-### 6. Business Hours Check
+#### **Layer 11: Business Hours Enforcement**
 - Timezone-aware time checking
 - Configurable business hours (default: 9 AM - 5 PM)
 - Weekend detection (optional)
 - Sends SMS instead of calling outside business hours
-- Prevents annoying 2 AM calls to your business
+- **Protects against**: Off-hours abuse when no one can answer
 
-**Configuration** (`.env` file):
-```env
-# Business Hours
+---
+
+### 💰 Cost Protection Summary
+
+**Maximum possible daily cost with default limits:**
+
+| Resource | Limit | Max Cost (USD) |
+|----------|-------|----------------|
+| Voice calls | 100/day | ~$13.00 (10min avg @ $0.013/min) |
+| SMS messages | 200/day | ~$1.50 (@ $0.0075/msg) |
+| **Total** | - | **~$14.50/day** |
+
+**Additional protections:**
+- ✅ Rate limiting prevents single IP from exhausting daily quota
+- ✅ Fingerprinting prevents distributed attacks (20 req/fingerprint/day)
+- ✅ Concurrent limits prevent cost spikes (max 5 simultaneous calls)
+- ✅ Duplicate prevention stops phone number spam (1 req/hour/phone)
+- ✅ Business hours enforcement reduces wasted calls
+
+**Worst-case scenario**: Even if all protections fail, Twilio account spending limits provide final safety net.
+
+---
+
+### 🔍 Monitoring & Alerts
+
+**Built-in monitoring tracks abuse attempts:**
+
+1. **Audit logging** - All blocked requests logged with reason:
+   - `fingerprint_abuse_blocked` - Fingerprint exceeded 20/day limit
+   - `duplicate_request_blocked` - Phone number in cooldown period
+   - `daily_limit_reached` - System-wide daily limits hit
+
+2. **Prometheus metrics** (if enabled):
+   - `twilio_calls_total` - Total calls initiated
+   - `twilio_sms_total` - Total SMS sent
+   - `verification_codes_sent` - Verification attempts
+   - `concurrency_limit_hits_total` - Concurrent limit violations
+
+3. **Daily compliance reports** (automated):
+   - Total requests, success rate, failures
+   - Abuse blocks count
+   - Cost threshold warnings
+
+4. **Real-time dashboard** (`/admin`):
+   - Live request status
+   - 24-hour activity graphs
+   - Abuse pattern detection
+
+---
+
+### 🛠️ Configuration for Maximum Protection
+
+**Recommended production settings:**
+
+```bash
+# Cost limits (adjust based on budget)
+MAX_CALLS_PER_DAY=100
+MAX_SMS_PER_DAY=200
+
+# Concurrent limits (prevent spikes)
+MAX_CONCURRENT_CALLS=5
+MAX_CONCURRENT_SMS=10
+CONCURRENCY_OVERFLOW_ACTION=reject  # or 'queue' or 'delay'
+
+# CORS (restrict to your domain only)
+ALLOWED_ORIGINS=https://yourdomain.com
+
+# Business hours (prevent off-hours abuse)
 BUSINESS_HOURS_START=09:00
 BUSINESS_HOURS_END=17:00
 BUSINESS_TIMEZONE=America/New_York
@@ -550,9 +684,51 @@ BUSINESS_WEEKDAYS_ONLY=true
 # reCAPTCHA
 RECAPTCHA_SECRET_KEY=your_secret_key_here
 RECAPTCHA_SITE_KEY=your_site_key_here
+
+# Cloudflare (if using Cloudflare Tunnel)
+# - Enable "Under Attack Mode" if experiencing DDoS
+# - Configure WAF rules to block suspicious patterns
+# - Set up rate limiting rules at Cloudflare edge
 ```
 
 **Get reCAPTCHA keys**: https://www.google.com/recaptcha/admin
+
+**Twilio account-level protections:**
+1. Set **spending limits** in Twilio Console → Account → Usage Triggers
+2. Enable **fraud detection** in Twilio Console → Security
+3. Configure **geographic permissions** to block high-risk countries
+4. Set up **usage alerts** for email notifications
+
+---
+
+### 🚀 How Protections Work Together
+
+**Example attack scenario: Distributed SMS bombing**
+
+1. Attacker uses 100 IPs to send verification codes to random numbers
+2. **Cloudflare** blocks 80% at edge (DDoS protection)
+3. **Rate limiting** blocks 15 IPs exceeding 10 SMS/minute
+4. **Fingerprinting** detects 5 IPs using same phone numbers (20/day limit)
+5. **Daily SMS limit** stops attack at 200 total SMS
+6. **Cost impact**: $1.50 maximum (200 SMS × $0.0075)
+
+**Without protections**: Could send 10,000+ SMS = $75+ cost
+
+---
+
+### ⚠️ Known Limitations
+
+1. **Cloudflare Tunnel bypass**: If attacker discovers direct IP, they bypass Cloudflare
+   - **Mitigation**: Use firewall rules to block all traffic except from Cloudflare IPs
+
+2. **Fingerprint evasion**: Sophisticated attackers can rotate IP + User-Agent + Phone
+   - **Mitigation**: reCAPTCHA provides additional bot protection
+
+3. **Legitimate high-volume users**: Business with many employees may hit limits
+   - **Mitigation**: Increase `MAX_CALLS_PER_DAY` or whitelist corporate IPs
+
+4. **SMS delivery delays**: Rate limiting may slow verification code delivery
+   - **Mitigation**: 10/minute limit is generous for legitimate users
 
 ---
 
