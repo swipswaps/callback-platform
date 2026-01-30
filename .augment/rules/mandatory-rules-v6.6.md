@@ -149,12 +149,25 @@ Call `launch-process` with `wait=true` → output in tool result <output> sectio
    - Quote what was captured before timeout
    - Report partial results
 
+**TIMEOUT PROTOCOL (MANDATORY):**
+
+When launch-process returns timeout or <error>Cancelled by user.</error>:
+
+- **STEP 1:** Look for <output> section in the SAME tool result
+- **STEP 2:** If <output> exists → Quote it verbatim
+- **STEP 3:** If <output> is empty/missing → State "No output captured before timeout"
+- **STEP 4:** NEVER call read-process, list-processes, or read-terminal
+- **STEP 5:** If more info needed → Retry the command with wait=true
+
+**FORBIDDEN:** Calling read-process "to check what was captured" - output is in tool result
+
 **FORBIDDEN (ZERO TOLERANCE):**
 - ❌ Ignoring <output> section when it exists
 - ❌ Saying "OK" without reading output
 - ❌ Saying "the command timed out" without reading partial output
 - ❌ Assuming failure without checking output
 - ❌ Calling additional commands to check results (output already in tool result)
+- ❌ Calling read-process after timeout (output is in tool result <output> section)
 
 **VIOLATION PENALTY:**
 - Immediate halt - user must manually show output that was already available

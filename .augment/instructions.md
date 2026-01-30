@@ -64,6 +64,18 @@ Tool returns output in <output> section - MUST READ IT AND QUOTE IT
    - Report partial results
 ```
 
+**TIMEOUT PROTOCOL (MANDATORY):**
+
+When launch-process returns timeout or <error>Cancelled by user.</error>:
+
+- **STEP 1:** Look for <output> section in the SAME tool result
+- **STEP 2:** If <output> exists → Quote it verbatim
+- **STEP 3:** If <output> is empty/missing → State "No output captured before timeout"
+- **STEP 4:** NEVER call read-process, list-processes, or read-terminal
+- **STEP 5:** If more info needed → Retry the command with wait=true
+
+**FORBIDDEN:** Calling read-process "to check what was captured" - output is in tool result
+
 **FORBIDDEN PATTERNS (ZERO TOLERANCE):**
 ❌ Ignoring <output> section when it exists
 ❌ Saying "OK" without reading output
@@ -72,6 +84,7 @@ Tool returns output in <output> section - MUST READ IT AND QUOTE IT
 ❌ Using wait=false (creates hidden terminals user can't see)
 ❌ Calling read-process (AI-only hidden tool - user can't see output)
 ❌ Calling list-processes (AI-only hidden tool - user can't see output)
+❌ Calling read-process after timeout (output is in tool result <output> section)
 ❌ Asking user to run commands (increases error chance)
 ❌ Using tee (not needed)
 ❌ Calling git status/log to check results (output already there)
