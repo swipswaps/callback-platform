@@ -72,6 +72,267 @@ A secure, flat-rate-friendly callback system that lets customers request a call,
 
 ---
 
+---
+
+## 🔧 Technologies Used
+
+This platform uses a modern, production-ready technology stack:
+
+| Component | Technology | Purpose |
+|-----------|-----------|---------|
+| **Frontend Hosting** | GitHub Pages | Free static site hosting with automatic HTTPS |
+| **Frontend Framework** | Vanilla JavaScript | No dependencies, fast loading, simple maintenance |
+| **Backend Framework** | Flask (Python 3.11) | Lightweight web framework for REST API |
+| **Database** | SQLite | Embedded database, no setup required, persistent storage |
+| **Containerization** | Docker + Docker Compose | Consistent deployment across environments |
+| **Tunnel** | Cloudflare Tunnel | Secure HTTPS without port forwarding or firewall changes |
+| **Voice/SMS** | Twilio API | Programmable communications (calls + SMS) |
+| **Authentication** | OAuth 2.0 | Social login (Google, Facebook, Instagram, X) |
+| **Bot Protection** | Google reCAPTCHA v2 | Prevent automated abuse and spam |
+| **Rate Limiting** | Flask-Limiter | Prevent resource exhaustion (200/day, 50/hr per IP) |
+| **Metrics** | Prometheus Client | Performance monitoring and metrics collection |
+| **Phone Validation** | phonenumbers library | E.164 format validation and sanitization |
+| **Timezone** | pytz | Business hours enforcement with timezone awareness |
+| **CI/CD** | GitHub Actions | Automatic deployment on every push to main |
+| **Proxy** | ProxyFix (Werkzeug) | Trust X-Forwarded-* headers from Cloudflare |
+| **CORS** | Flask-CORS | Cross-origin resource sharing control |
+
+### Key Technology Decisions
+
+**Why Vanilla JavaScript?**
+- No build step required
+- Faster page loads (no framework overhead)
+- Easier to maintain and debug
+- Works in all modern browsers
+
+**Why SQLite?**
+- Zero configuration
+- Perfect for small-to-medium traffic
+- Persistent storage in Docker volume
+- Easy to backup (single file)
+
+**Why Docker?**
+- Consistent environment (dev = production)
+- Easy deployment to any cloud provider
+- Isolated dependencies
+- Simple rollback (just change image tag)
+
+**Why Cloudflare Tunnel?**
+- No port forwarding needed
+- Automatic HTTPS with valid certificates
+- DDoS protection included
+- Works behind NAT/firewall
+
+**Why Twilio?**
+- Pay-as-you-go pricing (no monthly fees)
+- Reliable global infrastructure
+- Comprehensive API and SDKs
+- SMS + Voice in one platform
+
+---
+
+## 📊 How It Works (Technical Flow)
+
+### 1. Frontend Initialization
+
+```
+Page loads
+  ↓
+Backend Auto-Detection:
+  ├─ Try localhost:8501 (3s timeout)
+  │  └─ If success → Use local backend
+  └─ Fall back to api.swipswaps.com (4s timeout)
+     └─ If success → Use deployed backend
+  ↓
+Check Twilio Configuration:
+  └─ GET /health → Show setup wizard if not configured
+  ↓
+Show authentication screen (OAuth required)
+```
+
+### 2. OAuth Authentication Flow
+
+```
+User clicks "Continue with Google"
+  ↓
+Frontend: window.location = /oauth/google
+  ↓
+Backend: Redirects to Google OAuth consent screen
+  ↓
+Google: User authorizes application
+  ↓
+Google: Redirects back with authorization code
+  ↓
+Backend: Exchanges auth code for access token
+  ↓
+Backend: Fetches user info (name, email, profile picture)
+  ↓
+Backend: Creates session token
+  ↓
+Backend: Redirects to frontend with session token
+  ↓
+Frontend: Stores user info in localStorage
+  ↓
+Frontend: Shows callback request form (pre-filled with user details)
+```
+
+### 3. Callback Request Flow
+
+```
+User enters phone number + clicks "Request Callback"
+  ↓
+Frontend: Validates phone number format
+  ↓
+Frontend: Checks reCAPTCHA token
+  ↓
+Frontend: POST /callback/request
+  ↓
+Backend Security Checks:
+  ├─ Validates phone number (E.164 format using phonenumbers library)
+  ├─ Checks rate limits (5/min, 50/hr, 200/day per IP)
+  ├─ Checks duplicate request (60-minute cooldown per phone number)
+  ├─ Checks fingerprint abuse (SHA256 hash: IP + User-Agent + Phone)
+  │  └─ Max 20 requests per fingerprint per 24 hours
+  ├─ Checks daily cost limits (MAX_CALLS_PER_DAY, MAX_SMS_PER_DAY)
+  └─ Validates reCAPTCHA token
+  ↓
+Backend: Generates 6-digit verification code
+  ↓
+Backend: Sends SMS via Twilio API
+  ↓
+Backend: Stores request in SQLite database (status: pending)
+  ↓
+Backend: Returns request_id to frontend
+  ↓
+Frontend: Hides callback form
+  ↓
+Frontend: Shows verification code input
+  ↓
+Frontend: Displays phone number for confirmation
+```
+
+### 4. Verification Flow (Auto-Verify)
+
+```
+User types verification code
+  ↓
+Frontend: Listens for keyup event
+  ↓
+Frontend: Detects 6 digits entered
+  ↓
+Frontend: Automatically calls verifyCode() (no button click needed)
+  ↓
+Frontend: Sets isVerifying flag (prevents race conditions)
+  ↓
+Frontend: POST /callback/verify
+  ↓
+Backend: Validates code against database
+  ↓
+Backend: Checks code expiration (10-minute timeout)
+  ↓
+Backend: Checks if code already used
+  ↓
+Backend: Marks code as verified in database
+  ↓
+Backend: Updates request status to "verified"
+  ↓
+Backend: Initiates callback (calls business number first)
+  ↓
+Backend: Returns success to frontend
+  ↓
+Frontend: Resets isVerifying flag
+  ↓
+Frontend: Shows "Calling..." status
+  ↓
+Frontend: Starts status polling (every 2 seconds, max 30 polls)
+```
+
+### 5. Call Bridging Flow
+
+```
+Backend: Initiates call to BUSINESS_NUMBER via Twilio
+  ↓
+Twilio: Rings business phone
+  ↓
+┌─────────────────────────────────────────────────────┐
+│ IF Business Answers:                                │
+│   ↓                                                  │
+│   Backend: Receives webhook (status: answered)      │
+│   ↓                                                  │
+│   Backend: Updates database (status: calling)       │
+│   ↓                                                  │
+│   Backend: Initiates call to visitor's phone        │
+│   ↓                                                  │
+│   Twilio: Rings visitor's phone                     │
+│   ↓                                                  │
+│   ┌───────────────────────────────────────────────┐ │
+│   │ IF Visitor Answers:                           │ │
+│   │   ↓                                            │ │
+│   │   Twilio: Bridges both calls together         │ │
+│   │   ↓                                            │ │
+│   │   Backend: Updates status to "connected"      │ │
+│   │   ↓                                            │ │
+│   │   Frontend: Shows "Connected! Speaking now"   │ │
+│   │   ↓                                            │ │
+│   │   Both parties can talk                       │ │
+│   │   ↓                                            │ │
+│   │   Call ends when either party hangs up        │ │
+│   │   ↓                                            │ │
+│   │   Backend: Updates status to "completed"      │ │
+│   └───────────────────────────────────────────────┘ │
+│   ↓                                                  │
+│   ┌───────────────────────────────────────────────┐ │
+│   │ IF Visitor Doesn't Answer:                    │ │
+│   │   ↓                                            │ │
+│   │   Backend: Updates status to "failed"         │ │
+│   │   ↓                                            │ │
+│   │   Backend: Sends SMS to business with details │ │
+│   │   ↓                                            │ │
+│   │   Frontend: Shows "Call failed - we'll call"  │ │
+│   └───────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────┘
+  ↓
+┌─────────────────────────────────────────────────────┐
+│ IF Business Doesn't Answer:                        │
+│   ↓                                                  │
+│   Backend: Receives webhook (status: no-answer)     │
+│   ↓                                                  │
+│   Backend: Sends SMS to business with visitor info  │
+│   ↓                                                  │
+│   Backend: Updates status to "missed"               │
+│   ↓                                                  │
+│   Frontend: Shows "We'll call you back soon"        │
+└─────────────────────────────────────────────────────┘
+```
+
+### 6. Status Polling
+
+```
+Frontend: Starts polling after verification
+  ↓
+Every 2 seconds (max 30 polls = 60 seconds):
+  ├─ GET /callback/status/{request_id}
+  ├─ Backend: Returns current status from database
+  ├─ Frontend: Updates UI based on status
+  │  ├─ "pending" → "Waiting for verification..."
+  │  ├─ "verified" → "Verified! Initiating call..."
+  │  ├─ "calling" → "Calling you now..."
+  │  ├─ "connected" → "Connected! You're now speaking"
+  │  ├─ "completed" → "Call completed successfully"
+  │  ├─ "failed" → "Call failed - we'll contact you"
+  │  └─ "missed" → "We'll call you back soon"
+  └─ If status is terminal (connected/completed/failed/missed):
+     └─ Stop polling
+```
+
+---
+
+## 📖 Admin User Guide
+
+*For detailed admin dashboard features, bulk actions, security notes, and business owner guidance, see the [Detailed User Guide](#-detailed-user-guide) section below.*
+
+---
+
 ## 🚀 Quick Start Guide
 
 ### Prerequisites
