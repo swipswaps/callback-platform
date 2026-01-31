@@ -25,6 +25,11 @@
       </div>
     </div>
 
+    <!-- Application State Indicator (UX Directive #2: Render state visibly) -->
+    <div id="app-state-indicator" style="display: none; background: #e7f3ff; border-left: 4px solid #2196F3; padding: 12px 16px; margin: 16px 0; border-radius: 4px; font-size: 14px;">
+      <strong>Status:</strong> <span id="app-state-text">Initializing...</span>
+    </div>
+
     <!-- Setup Wizard Link (shown when Twilio not configured) -->
     <div id="setup-wizard-notice" style="display: none; background: #fff3cd; border-left: 4px solid #ffc107; padding: 16px; margin: 20px 0; border-radius: 4px;">
       <h3 style="margin-top: 0; color: #856404;">⚙️ Twilio Not Configured</h3>

@@ -1550,6 +1550,152 @@ MIT License - feel free to use for commercial or personal projects.
 
 ---
 
+## 🔢 Exit Codes
+
+The backend uses structured exit codes to communicate shutdown reasons. This is part of the UX contract - exit codes are not arbitrary.
+
+| Exit Code | Name | Meaning | When It Occurs |
+|-----------|------|---------|----------------|
+| **0** | SUCCESS | Normal shutdown | Clean shutdown via SIGTERM or normal exit |
+| **1** | USER_ERROR | Invalid user input or configuration | Missing required environment variables, invalid config values |
+| **2** | CONFIG_ERROR | Configuration error | Database connection failed, Twilio credentials invalid |
+| **3** | RUNTIME_ERROR | Fatal runtime error | Unhandled exception during operation, critical system failure |
+| **130** | INTERRUPTED | Interrupted by user | Ctrl-C (SIGINT) or SIGTERM received |
+
+### Exit Code Guarantees
+
+✅ **The backend will NEVER use `sys.exit(1)` casually** - all exits use the `ExitCode` enum
+✅ **Exit codes are logged** - check logs to see why the application exited
+✅ **Graceful shutdown is guaranteed** - SIGTERM/SIGINT always trigger cleanup before exit
+
+### Example Usage
+
+```bash
+# Check exit code after backend stops
+docker-compose logs backend | tail -20
+
+# Exit code 0 (normal shutdown)
+# You'll see: "✅ Graceful shutdown complete"
+
+# Exit code 3 (runtime error)
+# You'll see: "❌ Fatal error during <action>: <error message>"
+
+# Exit code 130 (interrupted)
+# You'll see: "🛑 Received SIGINT. Shutting down gracefully..."
+```
+
+---
+
+## 🎯 UX Contract & State Model
+
+This section explains **what users should expect** from the application. The state model is not just internal implementation - it's part of the product surface.
+
+### Backend State Model
+
+The backend operates as a **finite-state machine** with these states:
+
+| State | Meaning | What's Happening |
+|-------|---------|------------------|
+| **STARTING** | Application is initializing | Loading config, connecting to database, starting scheduler |
+| **READY** | Ready to accept requests | Normal operation, accepting callback requests |
+| **BUSY** | Processing high load | Still accepting requests but may be slower |
+| **DEGRADED** | Partial functionality | Some features unavailable (e.g., Twilio down) |
+| **SHUTTING_DOWN** | Graceful shutdown in progress | Finishing active requests, stopping workers |
+
+**State transitions are enforced** - the backend will refuse invalid operations (e.g., cannot accept requests in SHUTTING_DOWN state).
+
+### Frontend State Model
+
+The frontend visibly displays its state to users:
+
+| State | User Sees | What's Happening |
+|-------|-----------|------------------|
+| **INITIALIZING** | "⏳ Initializing..." | Page just loaded, setting up |
+| **DETECTING_BACKEND** | "🔍 Connecting to server..." | Trying localhost → deployed backend |
+| **READY** | "✅ Ready" (hidden) | Form is ready for input |
+| **REQUESTING_CALLBACK** | "📞 Submitting request..." | Sending callback request to backend |
+| **VERIFYING** | "🔐 Verifying..." | Checking verification code |
+| **CALLING** | "📞 Calling you now..." | Initiating the actual call |
+| **CONNECTED** | "✅ Connected" | Call successfully connected |
+| **ERROR** | "❌ Error" | Something went wrong, error message shown |
+
+**State is always visible** - users can answer "what state am I in?" in under one second by looking at the status indicator.
+
+### Typical Lifecycle
+
+Here's what a successful callback request looks like:
+
+```
+1. Page loads → INITIALIZING
+2. Backend detected → DETECTING_BACKEND → READY
+3. User submits form → REQUESTING_CALLBACK
+4. SMS sent → User enters code → VERIFYING
+5. Code verified → CALLING
+6. Call connected → CONNECTED
+7. Call ends → READY (form resets)
+```
+
+### Failure States & User Expectations
+
+**What happens when things go wrong:**
+
+| Failure Scenario | User Sees | Next Step Provided |
+|------------------|-----------|-------------------|
+| **Backend unreachable** | "❌ No backend detected" | "Please check your connection or contact support" |
+| **Invalid verification code** | "❌ Error occurred while verifying your code: Invalid code" | "Please try again or contact support if the problem persists" |
+| **Rate limit exceeded** | "❌ Too many requests. Please try again later." | Wait time shown (e.g., "Try again in 5 minutes") |
+| **Twilio error** | "❌ Error occurred while starting your call: Twilio service unavailable" | "Please try again or contact support if the problem persists" |
+
+**UX Guarantees:**
+
+✅ **No silent failures** - every error is surfaced to the user with context
+✅ **No hanging** - every operation has a timeout and fallback
+✅ **Graceful degradation** - if Twilio is down, users see a clear error (not a generic 500)
+✅ **Last action context** - errors always include what the system was doing when it failed
+✅ **Next steps** - errors always suggest what the user should do next
+
+### Logging Verbosity
+
+The backend supports three logging modes:
+
+| Mode | Flag | What You See |
+|------|------|--------------|
+| **Normal** | (default) | Standard INFO logs, startup banner, state transitions |
+| **Quiet** | `--quiet` | Minimal output, no startup banner, errors only |
+| **Verbose** | `--verbose` | DEBUG logs, state transitions, backend decisions, detailed traces |
+
+**Example:**
+
+```bash
+# Normal mode (default)
+docker-compose up
+
+# Quiet mode (production)
+docker-compose run backend python app.py --quiet
+
+# Verbose mode (debugging)
+docker-compose run backend python app.py --verbose
+```
+
+**What changes:**
+
+- **Quiet mode**: Suppresses startup banners, state transition logs, worker health checks
+- **Verbose mode**: Shows every state change, every action, every backend decision (useful for debugging)
+
+### Graceful Shutdown Behavior
+
+When you stop the backend (Ctrl-C or `docker-compose down`):
+
+1. **Signal received** → "🛑 Received SIGINT. Shutting down gracefully..."
+2. **State transition** → SHUTTING_DOWN
+3. **Cleanup** → Stop scheduler, log worker health
+4. **Confirmation** → "✅ Graceful shutdown complete"
+5. **Exit** → Exit code 130 (INTERRUPTED)
+
+**Users will feel the difference** - the shutdown is announced, not silent.
+
+---
+
 ## 🆘 Support
 
 ### Getting Help

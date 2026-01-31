@@ -24,15 +24,69 @@ const AppState = Object.freeze({
 let currentAppState = AppState.INITIALIZING;
 let lastAction = 'initializing';
 
-// State management with logging
+// State management with logging and UI rendering (UX Directive #2)
 function setState(state) {
   currentAppState = state;
   log('info', `STATE → ${state}`);
+
+  // Render state visibly in UI
+  renderStateIndicator(state);
 }
 
 function setAction(action) {
   lastAction = action;
   log('info', `ACTION → ${action}`);
+}
+
+// Assert expected state before allowing actions (UX Directive #1: Enforce FSM)
+function assertState(expectedState, actionDescription) {
+  if (currentAppState !== expectedState) {
+    const errorMsg = `Cannot ${actionDescription}: Invalid state. Expected "${expectedState}", but current state is "${currentAppState}"`;
+    log('error', errorMsg);
+    showStatus('error', errorMsg);
+    throw new Error(errorMsg);
+  }
+}
+
+// Render state indicator in UI (UX Directive #2: Make state user-visible)
+function renderStateIndicator(state) {
+  const indicator = document.getElementById('app-state-indicator');
+  const stateText = document.getElementById('app-state-text');
+
+  if (!indicator || !stateText) return;
+
+  // State descriptions for users
+  const stateDescriptions = {
+    [AppState.INITIALIZING]: '⏳ Initializing...',
+    [AppState.DETECTING_BACKEND]: '🔍 Connecting to server...',
+    [AppState.READY]: '✅ Ready',
+    [AppState.REQUESTING_CALLBACK]: '📞 Submitting request...',
+    [AppState.VERIFYING]: '🔐 Verifying...',
+    [AppState.CALLING]: '📞 Calling you now...',
+    [AppState.CONNECTED]: '✅ Connected',
+    [AppState.ERROR]: '❌ Error'
+  };
+
+  stateText.textContent = stateDescriptions[state] || state;
+
+  // Show indicator for non-ready states
+  if (state === AppState.READY) {
+    indicator.style.display = 'none';
+  } else {
+    indicator.style.display = 'block';
+
+    // Color coding
+    if (state === AppState.ERROR) {
+      indicator.style.background = '#ffebee';
+      indicator.style.borderLeftColor = '#f44336';
+    } else if (state === AppState.CONNECTED) {
+      indicator.style.background = '#e8f5e9';
+      indicator.style.borderLeftColor = '#4caf50';
+    } else {
+      indicator.style.background = '#e7f3ff';
+      indicator.style.borderLeftColor = '#2196F3';
+    }
+  }
 }
 
 // Backend detection state
@@ -100,6 +154,7 @@ async function detectBackend() {
         log('info', '✅ Local backend detected', { url: CONFIG.LOCAL_BACKEND });
         showBackendStatus('local');
         await checkTwilioConfiguration();
+        setState(AppState.READY); // UX Directive #1: Set state to READY after successful detection
         return true;
       }
     }
@@ -130,6 +185,7 @@ async function detectBackend() {
         backendDetected = true;
         log('info', '✅ Deployed backend detected', { url: CONFIG.DEPLOYED_BACKEND, data });
         showBackendStatus('deployed');
+        setState(AppState.READY); // UX Directive #1: Set state to READY after successful detection
         return true;
       } else {
         throw new Error(`Backend unhealthy: ${data.status}`);
@@ -146,6 +202,7 @@ async function detectBackend() {
   backendDetected = false;
   log('error', '❌ No backend detected');
   showBackendStatus('none');
+  setState(AppState.ERROR); // UX Directive #1: Set state to ERROR if no backend detected
   return false;
 }
 
@@ -318,6 +375,13 @@ async function pollCallbackStatus(requestId, pollCount = 0) {
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
 
+  // UX Directive #1: Assert state before allowing action
+  try {
+    assertState(AppState.READY, 'submit callback request');
+  } catch (error) {
+    return; // Error already shown to user
+  }
+
   // Get reCAPTCHA response token
   const recaptchaResponse = grecaptcha.getResponse();
 
@@ -345,6 +409,8 @@ form.addEventListener("submit", async (e) => {
     return;
   }
 
+  setState(AppState.REQUESTING_CALLBACK);
+  setAction('requesting callback');
   log('info', 'Callback request submitted', { hasName: !!payload.name, hasEmail: !!payload.email, hasCaptcha: true });
 
   showStatus('info', '📞 Submitting callback request...');
@@ -371,8 +437,17 @@ form.addEventListener("submit", async (e) => {
     } else {
       log('error', 'Callback request failed', { error: data.error });
 
-      // Show error message (duplicate requests are now auto-cancelled by backend)
-      showStatus('error', data.error || 'Failed to submit callback request');
+      // UX Directive #3: Display last_action context from backend
+      let errorMessage = data.error || 'Failed to submit callback request';
+      if (data.context) {
+        errorMessage = `${data.context}: ${errorMessage}`;
+      }
+      if (data.next_step) {
+        errorMessage += ` ${data.next_step}`;
+      }
+
+      showStatus('error', errorMessage);
+      setState(AppState.ERROR);
 
       // Reset reCAPTCHA on error so user can retry
       grecaptcha.reset();
@@ -380,6 +455,7 @@ form.addEventListener("submit", async (e) => {
   } catch (err) {
     log('error', 'Network error during callback request', { error: err.message });
     showStatus('error', 'Network error. Please check your connection and try again.');
+    setState(AppState.ERROR);
 
     // Reset reCAPTCHA on network error
     grecaptcha.reset();
@@ -491,6 +567,9 @@ async function verifyCode() {
 
   console.log('[AUTO-VERIFY DEBUG] Validation passed, proceeding with verification...');
 
+  setState(AppState.VERIFYING);
+  setAction('verifying code');
+
   try {
     console.log('[AUTO-VERIFY DEBUG] Starting verification request...');
     showStatus('info', '🔍 Verifying code...');
@@ -529,7 +608,18 @@ async function verifyCode() {
     } else {
       console.log('[AUTO-VERIFY DEBUG] Verification FAILED! Error:', data.error);
       log('error', 'Verification failed', { error: data.error });
-      showStatus('error', data.error || 'Invalid verification code');
+
+      // UX Directive #3: Display last_action context from backend
+      let errorMessage = data.error || 'Invalid verification code';
+      if (data.context) {
+        errorMessage = `${data.context}: ${errorMessage}`;
+      }
+      if (data.next_step) {
+        errorMessage += ` ${data.next_step}`;
+      }
+
+      showStatus('error', errorMessage);
+      setState(AppState.ERROR);
       verifyBtn.disabled = false;
       isVerifying = false; // Reset flag on error so user can retry
     }
@@ -543,6 +633,9 @@ async function verifyCode() {
 }
 
 async function initiateCallback(requestId) {
+  setState(AppState.CALLING);
+  setAction('initiating callback');
+
   try {
     showStatus('info', '📞 Calling you now...');
 
@@ -557,17 +650,30 @@ async function initiateCallback(requestId) {
     if (data.success) {
       log('info', 'Callback initiated', { requestId });
       showStatus('success', '✓ Calling you now! Please answer your phone.');
+      setState(AppState.CONNECTED);
       hideVerificationUI();
 
       // Start polling for status updates
       pollCallbackStatus(requestId);
     } else {
       log('error', 'Failed to initiate callback', { error: data.error });
-      showStatus('error', data.error || 'Failed to initiate callback');
+
+      // UX Directive #3: Display last_action context from backend
+      let errorMessage = data.error || 'Failed to initiate callback';
+      if (data.context) {
+        errorMessage = `${data.context}: ${errorMessage}`;
+      }
+      if (data.next_step) {
+        errorMessage += ` ${data.next_step}`;
+      }
+
+      showStatus('error', errorMessage);
+      setState(AppState.ERROR);
     }
   } catch (err) {
     log('error', 'Network error initiating callback', { error: err.message });
     showStatus('error', 'Network error. Please try again.');
+    setState(AppState.ERROR);
   }
 }
 

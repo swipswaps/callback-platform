@@ -66,12 +66,66 @@ def set_state(state: AppState):
     """Set application state with logging"""
     global current_state
     current_state = state
-    logger.info(f"STATE → {state.value}")
+    if VERBOSE:
+        logger.info(f"STATE → {state.value}")
 
 def set_action(action: str):
     """Track last action for crash reporting"""
     global last_action
     last_action = action
+    if VERBOSE:
+        logger.debug(f"ACTION → {action}")
+
+def assert_state(expected_state: AppState, action_description: str):
+    """
+    Assert that the application is in the expected state.
+    Raises ValueError if state is invalid.
+    This enforces the finite-state machine model.
+
+    Args:
+        expected_state: The required state
+        action_description: Human-readable description of the action being attempted
+
+    Raises:
+        ValueError: If current state doesn't match expected state
+    """
+    if current_state != expected_state:
+        error_msg = f"Cannot {action_description}: Invalid state. Expected {expected_state.value}, but current state is {current_state.value}"
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+
+def error_response(error_message: str, status_code: int = 500, include_context: bool = True):
+    """
+    Create a standardized error response with optional context.
+    Includes last_action for user-visible failure context.
+
+    Args:
+        error_message: The error message to display
+        status_code: HTTP status code
+        include_context: Whether to include last_action context
+
+    Returns:
+        tuple: (jsonify response, status_code)
+    """
+    response_data = {
+        "success": False,
+        "error": error_message
+    }
+
+    if include_context and last_action:
+        # Make last_action human-readable
+        action_phrases = {
+            "initializing": "starting up",
+            "detecting backend": "connecting to server",
+            "requesting callback": "submitting your request",
+            "verifying code": "verifying your code",
+            "initiating callback": "starting your call"
+        }
+        human_action = action_phrases.get(last_action, last_action)
+        response_data["context"] = f"Error occurred while {human_action}"
+        response_data["next_step"] = "Please try again or contact support if the problem persists"
+
+    return jsonify(response_data), status_code
 
 # Configure comprehensive logging per Rule 25
 LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s | %(funcName)s | %(message)s"
@@ -2583,6 +2637,7 @@ def verify_code_endpoint():
     - request_finished: Update status after HTTP response (async)
     """
     try:
+        set_action("verifying code")
         data = request.get_json()
 
         # Validate required fields
@@ -2590,10 +2645,10 @@ def verify_code_endpoint():
         code = data.get("code", "").strip()
 
         if not request_id:
-            return jsonify(success=False, error="Request ID is required"), 400
+            return error_response("Request ID is required", 400)
 
         if not code:
-            return jsonify(success=False, error="Verification code is required"), 400
+            return error_response("Verification code is required", 400)
 
         # COMMIT MODE: on_db_commit (default)
         # Verify code first - this commits the verification to DB
@@ -2602,7 +2657,7 @@ def verify_code_endpoint():
         if not success:
             log_audit_event(request_id, "verification_failed", {"channel": "sms", "error": error})
             commit_mode_transactions_total.labels(mode=COMMIT_MODE, operation='verification_failed').inc()
-            return jsonify(success=False, error=error), 400
+            return error_response(error, 400)
 
         # Track successful verification
         commit_mode_transactions_total.labels(mode=COMMIT_MODE, operation='verification').inc()
@@ -2813,13 +2868,14 @@ def initiate_callback():
     This is step 3 of the new verification flow (after /send_verification and /verify_code).
     """
     try:
+        set_action("initiating callback")
         data = request.get_json()
 
         # Validate required fields
         request_id = data.get("request_id", "").strip()
 
         if not request_id:
-            return jsonify(success=False, error="Request ID is required"), 400
+            return error_response("Request ID is required", 400)
 
         # Check if request exists and get details
         conn = sqlite3.connect(DATABASE_PATH)
@@ -2835,7 +2891,7 @@ def initiate_callback():
         conn.close()
 
         if not row:
-            return jsonify(success=False, error="Request not found"), 404
+            return error_response("Request not found", 404)
 
         visitor_name, visitor_email, visitor_phone, request_status = row
 
@@ -2843,7 +2899,7 @@ def initiate_callback():
         is_verified, verified_channel = check_verification_status(request_id)
 
         if not is_verified:
-            return jsonify(success=False, error="Verification required. Please verify your phone number first."), 403
+            return error_response("Verification required. Please verify your phone number first.", 403)
 
         logger.info(f"Initiating callback for verified request {request_id} (verified via {verified_channel})")
 
@@ -4355,7 +4411,11 @@ def graceful_shutdown(signum, frame):
     """Handle SIGTERM/SIGINT for graceful shutdown."""
     global shutdown_requested
     signal_name = signal.Signals(signum).name
-    logger.warning(f"Received {signal_name}. Shutting down gracefully...")
+
+    # UX Directive #6: Make shutdown felt, not just handled
+    logger.warning("=" * 60)
+    logger.warning(f"🛑 Received {signal_name}. Shutting down gracefully...")
+    logger.warning("=" * 60)
     set_state(AppState.SHUTTING_DOWN)
     shutdown_requested = True
 
@@ -4363,15 +4423,18 @@ def graceful_shutdown(signum, frame):
     try:
         if scheduler.running:
             scheduler.shutdown(wait=False)
-            logger.info("Scheduler stopped")
+            logger.info("✓ Scheduler stopped")
     except Exception as e:
-        logger.error(f"Error stopping scheduler: {e}")
+        logger.error(f"✗ Error stopping scheduler: {e}")
 
     # Log final worker health
     health_report = check_worker_health()
-    logger.info(f"Final worker health: {health_report}")
+    logger.info(f"✓ Final worker health: {health_report}")
 
-    logger.info("Graceful shutdown complete")
+    # UX Directive #6: Confirm completion
+    logger.warning("=" * 60)
+    logger.warning("✅ Graceful shutdown complete")
+    logger.warning("=" * 60)
     sys.exit(ExitCode.INTERRUPTED)
 
 
@@ -4390,25 +4453,37 @@ retry_thread = threading.Thread(
     daemon=True
 )
 retry_thread.start()
-logger.info("Background retry processor thread started with health monitoring")
+if not QUIET:
+    logger.info("Background retry processor thread started with health monitoring")
 
 
 if __name__ == "__main__":
     try:
         set_state(AppState.STARTING)
-        logger.info("Starting Callback Service Backend")
-        logger.info(f"Frontend URL: {FRONTEND_URL}")
-        logger.info(f"Database: {DATABASE_PATH}")
-        logger.info(f"Twilio configured: {twilio_client is not None}")
+
+        # UX Directive #5: --quiet suppresses startup banners
+        if not QUIET:
+            logger.info("=" * 60)
+            logger.info("Starting Callback Service Backend")
+            logger.info("=" * 60)
+            logger.info(f"Frontend URL: {FRONTEND_URL}")
+            logger.info(f"Database: {DATABASE_PATH}")
+            logger.info(f"Twilio configured: {twilio_client is not None}")
+            logger.info(f"Log level: {'DEBUG' if VERBOSE else 'WARNING' if QUIET else 'INFO'}")
+            logger.info("=" * 60)
 
         set_state(AppState.READY)
-        logger.info("Application ready - listening on 0.0.0.0:8501")
+
+        # UX Directive #6: Announce state transition explicitly
+        if not QUIET:
+            logger.info("✅ Application ready - listening on 0.0.0.0:8501")
 
         # Use waitress for production-ready WSGI server
         from waitress import serve
         serve(app, host="0.0.0.0", port=8501)
     except Exception as e:
-        logger.error(f"Fatal error during {last_action}: {e}", exc_info=True)
+        # UX Directive #3: Include last_action in crash reports
+        logger.error(f"❌ Fatal error during {last_action}: {e}", exc_info=True)
         set_state(AppState.DEGRADED)
         sys.exit(ExitCode.RUNTIME_ERROR)
 
