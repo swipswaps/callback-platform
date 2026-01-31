@@ -211,6 +211,65 @@ Tool name typos (especially hyphen vs underscore) are common and preventable. As
 
 ---
 
+## RULE 9C — File Editing with Corrupted Content (ZERO TOLERANCE)
+
+**When str-replace-editor fails due to character encoding mismatches:**
+
+**MANDATORY PROTOCOL:**
+
+1. **STEP 1:** Use `view` tool to read the file and see EXACT characters (including corrupted ones)
+2. **STEP 2:** Use `str-replace-editor` with the ACTUAL characters present in the file
+3. **STEP 3:** Use corrupted characters in `old_str` parameter
+4. **STEP 4:** Replace with correct characters in `new_str` parameter
+5. **STEP 5:** Verify the replacement succeeded
+
+**FORBIDDEN (ZERO TOLERANCE):**
+- ❌ Using sed to fix character encoding issues
+- ❌ Using awk to fix character encoding issues
+- ❌ Using perl to fix character encoding issues
+- ❌ Using any command-line tool to edit files
+- ❌ Attempting str-replace-editor without first viewing the file
+- ❌ Guessing what the corrupted characters are
+
+**CORRECT EXAMPLE:**
+
+```bash
+# STEP 1: View file to see actual characters
+view README.md → Shows "## � Admin User Guide" (corrupted)
+
+# STEP 2: Use str-replace-editor with ACTUAL corrupted character
+str-replace-editor:
+  old_str: "## � Admin User Guide"  # Use actual corrupted character from file
+  new_str: "## 📖 Admin User Guide"  # Replace with correct emoji
+```
+
+**WRONG EXAMPLE:**
+
+```bash
+# ❌ VIOLATION: Using sed instead of str-replace-editor
+sed -i 's/� Admin/📖 Admin/' README.md
+
+# ❌ VIOLATION: Attempting str-replace-editor without viewing file first
+str-replace-editor:
+  old_str: "## 📖 Admin User Guide"  # Assumes file has correct emoji
+  new_str: "## 📖 Admin User Guide"  # Will fail if file has corrupted character
+```
+
+**RATIONALE:**
+- System instructions explicitly forbid: "DO NOT use sed or any other command line tools for editing files"
+- Using sed bypasses IDE integration, version control awareness, and safety checks
+- str-replace-editor provides undo capability, syntax validation, and proper file handling
+- Viewing the file first ensures exact character match for str-replace-editor
+
+**VIOLATION PENALTY:**
+- Direct violation of system instructions
+- Bypasses IDE integration and safety checks
+- No undo capability
+- No syntax validation
+- Wastes user's time and money
+
+---
+
 ## RULE 10 — USER-MANDATED COMMAND AUTHORITY
 
 User-declared correct commands are mandatory.
