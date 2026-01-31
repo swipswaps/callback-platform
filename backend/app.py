@@ -9,6 +9,8 @@ Features:
 - SMS fallback for missed calls
 - Comprehensive logging per Rule 25
 - Security: CORS, rate limiting, input validation
+- Graceful shutdown handling (SIGINT/SIGTERM)
+- Structured exit codes for automation
 """
 
 import os
@@ -21,6 +23,9 @@ import uuid
 import requests
 import secrets
 import time
+import signal
+import atexit
+from enum import Enum
 from datetime import datetime, timedelta
 from flask import Flask, request, redirect, jsonify
 from flask_cors import CORS
@@ -38,23 +43,67 @@ from prometheus_client import Counter, Gauge, Histogram, generate_latest, CONTEN
 from requests.exceptions import ConnectionError, Timeout
 from urllib3.exceptions import NameResolutionError
 
+# Structured exit codes for automation
+class ExitCode(int, Enum):
+    SUCCESS = 0
+    USER_ERROR = 1
+    CONFIG_ERROR = 2
+    RUNTIME_ERROR = 3
+    INTERRUPTED = 130  # Ctrl-C / SIGINT
+
+# Application state tracking for crash reporting
+class AppState(str, Enum):
+    STARTING = "starting"
+    READY = "ready"
+    BUSY = "busy"
+    DEGRADED = "degraded"
+    SHUTTING_DOWN = "shutting_down"
+
+current_state = AppState.STARTING
+last_action = "initializing"
+
+def set_state(state: AppState):
+    """Set application state with logging"""
+    global current_state
+    current_state = state
+    logger.info(f"STATE → {state.value}")
+
+def set_action(action: str):
+    """Track last action for crash reporting"""
+    global last_action
+    last_action = action
+
 # Configure comprehensive logging per Rule 25
 LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s | %(funcName)s | %(message)s"
 LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
+# Support --verbose and --quiet flags
+VERBOSE = "--verbose" in sys.argv
+QUIET = "--quiet" in sys.argv
+
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+
+# Set log level based on flags
+if QUIET:
+    logger.setLevel(logging.WARNING)
+elif VERBOSE:
+    logger.setLevel(logging.DEBUG)
+else:
+    logger.setLevel(logging.INFO)
 
 if not logger.handlers:
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.DEBUG)
+    console_handler.setLevel(logging.DEBUG if VERBOSE else logging.INFO)
     console_handler.setFormatter(logging.Formatter(LOG_FORMAT, LOG_DATE_FORMAT))
     logger.addHandler(console_handler)
-    
+
     file_handler = logging.FileHandler("/tmp/app.log", mode="a")
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(logging.Formatter(LOG_FORMAT, LOG_DATE_FORMAT))
     logger.addHandler(file_handler)
+
+# Graceful shutdown handling (will be registered at end of file)
+shutdown_requested = False
 
 # Priority levels for queue prioritization
 PRIORITY_HIGH = 'high'
@@ -4304,7 +4353,11 @@ def retry_processor_worker():
 # Graceful shutdown handler
 def graceful_shutdown(signum, frame):
     """Handle SIGTERM/SIGINT for graceful shutdown."""
-    logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+    global shutdown_requested
+    signal_name = signal.Signals(signum).name
+    logger.warning(f"Received {signal_name}. Shutting down gracefully...")
+    set_state(AppState.SHUTTING_DOWN)
+    shutdown_requested = True
 
     # Stop scheduler
     try:
@@ -4319,7 +4372,7 @@ def graceful_shutdown(signum, frame):
     logger.info(f"Final worker health: {health_report}")
 
     logger.info("Graceful shutdown complete")
-    sys.exit(0)
+    sys.exit(ExitCode.INTERRUPTED)
 
 
 # Register signal handlers
@@ -4341,13 +4394,22 @@ logger.info("Background retry processor thread started with health monitoring")
 
 
 if __name__ == "__main__":
-    logger.info("Starting Callback Service Backend")
-    logger.info(f"Frontend URL: {FRONTEND_URL}")
-    logger.info(f"Database: {DATABASE_PATH}")
-    logger.info(f"Twilio configured: {twilio_client is not None}")
+    try:
+        set_state(AppState.STARTING)
+        logger.info("Starting Callback Service Backend")
+        logger.info(f"Frontend URL: {FRONTEND_URL}")
+        logger.info(f"Database: {DATABASE_PATH}")
+        logger.info(f"Twilio configured: {twilio_client is not None}")
 
-    # Use waitress for production-ready WSGI server
-    from waitress import serve
-    serve(app, host="0.0.0.0", port=8501)
+        set_state(AppState.READY)
+        logger.info("Application ready - listening on 0.0.0.0:8501")
+
+        # Use waitress for production-ready WSGI server
+        from waitress import serve
+        serve(app, host="0.0.0.0", port=8501)
+    except Exception as e:
+        logger.error(f"Fatal error during {last_action}: {e}", exc_info=True)
+        set_state(AppState.DEGRADED)
+        sys.exit(ExitCode.RUNTIME_ERROR)
 
 

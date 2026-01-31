@@ -9,6 +9,32 @@ const CONFIG = {
   DETECTION_TIMEOUT: 3000 // 3 seconds to detect local backend
 };
 
+// Application state model (explicit state tracking for UX clarity)
+const AppState = Object.freeze({
+  INITIALIZING: 'initializing',
+  DETECTING_BACKEND: 'detecting_backend',
+  READY: 'ready',
+  REQUESTING_CALLBACK: 'requesting_callback',
+  VERIFYING: 'verifying',
+  CALLING: 'calling',
+  CONNECTED: 'connected',
+  ERROR: 'error'
+});
+
+let currentAppState = AppState.INITIALIZING;
+let lastAction = 'initializing';
+
+// State management with logging
+function setState(state) {
+  currentAppState = state;
+  log('info', `STATE → ${state}`);
+}
+
+function setAction(action) {
+  lastAction = action;
+  log('info', `ACTION → ${action}`);
+}
+
 // Backend detection state
 let backendDetected = false;
 let usingLocalBackend = false;
@@ -46,6 +72,8 @@ function log(level, message, data = {}) {
 
 // Backend detection function
 async function detectBackend() {
+  setState(AppState.DETECTING_BACKEND);
+  setAction('detecting backend');
   log('info', 'Starting backend detection...');
   log('info', 'Current hostname:', { hostname: window.location.hostname });
   showBackendStatus('checking');
