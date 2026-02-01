@@ -21,16 +21,36 @@ const AppState = Object.freeze({
   ERROR: 'error'
 });
 
+// FSM TRANSITION TABLE (Single Source of Truth)
+// Defines all legal state transitions - prevents drift and regressions
+const ALLOWED_TRANSITIONS = {
+  initializing: ['detecting_backend'],
+  detecting_backend: ['ready', 'error'],
+  ready: ['requesting_callback'],
+  requesting_callback: ['verifying', 'error'],
+  verifying: ['calling', 'error'],
+  calling: ['connected', 'error'],
+  connected: ['ready'],  // Allow returning to ready after call completes
+  error: ['ready']       // Allow recovery from error state
+};
+
 let currentAppState = AppState.INITIALIZING;
 let lastAction = 'initializing';
 
-// State management with logging and UI rendering (UX Directive #2)
-function setState(state) {
-  currentAppState = state;
-  log('info', `STATE → ${state}`);
+// Transition to a new state with FSM enforcement
+// This is the ONLY legal way to change application state
+function transitionTo(nextState) {
+  const allowed = ALLOWED_TRANSITIONS[currentAppState] || [];
 
-  // Render state visibly in UI
-  renderStateIndicator(state);
+  if (!allowed.includes(nextState)) {
+    throw new Error(
+      `Invalid state transition: ${currentAppState} → ${nextState}`
+    );
+  }
+
+  log('info', `STATE: ${currentAppState} → ${nextState}`);
+  currentAppState = nextState;
+  renderStateIndicator(nextState);
 }
 
 function setAction(action) {
@@ -45,6 +65,22 @@ function assertState(expectedState, actionDescription) {
     log('error', errorMsg);
     showStatus('error', errorMsg);
     throw new Error(errorMsg);
+  }
+}
+
+// Assert UX invariants that must ALWAYS be true
+// If any invariant is violated, execution stops immediately
+function assertUXInvariants() {
+  if (!currentAppState) {
+    throw new Error('UX invariant violated: currentState is undefined');
+  }
+
+  if (!document.getElementById('app-state-indicator')) {
+    throw new Error('UX invariant violated: state indicator missing from DOM');
+  }
+
+  if (!Object.values(AppState).includes(currentAppState)) {
+    throw new Error(`UX invariant violated: Invalid state "${currentAppState}"`);
   }
 }
 
@@ -126,7 +162,7 @@ function log(level, message, data = {}) {
 
 // Backend detection function
 async function detectBackend() {
-  setState(AppState.DETECTING_BACKEND);
+  transitionTo(AppState.DETECTING_BACKEND);
   setAction('detecting backend');
   log('info', 'Starting backend detection...');
   log('info', 'Current hostname:', { hostname: window.location.hostname });
@@ -154,7 +190,7 @@ async function detectBackend() {
         log('info', '✅ Local backend detected', { url: CONFIG.LOCAL_BACKEND });
         showBackendStatus('local');
         await checkTwilioConfiguration();
-        setState(AppState.READY); // UX Directive #1: Set state to READY after successful detection
+        transitionTo(AppState.READY); // UX Directive #1: Set state to READY after successful detection
         return true;
       }
     }
@@ -185,7 +221,7 @@ async function detectBackend() {
         backendDetected = true;
         log('info', '✅ Deployed backend detected', { url: CONFIG.DEPLOYED_BACKEND, data });
         showBackendStatus('deployed');
-        setState(AppState.READY); // UX Directive #1: Set state to READY after successful detection
+        transitionTo(AppState.READY); // UX Directive #1: Set state to READY after successful detection
         return true;
       } else {
         throw new Error(`Backend unhealthy: ${data.status}`);
@@ -202,7 +238,7 @@ async function detectBackend() {
   backendDetected = false;
   log('error', '❌ No backend detected');
   showBackendStatus('none');
-  setState(AppState.ERROR); // UX Directive #1: Set state to ERROR if no backend detected
+  transitionTo(AppState.ERROR); // UX Directive #1: Set state to ERROR if no backend detected
   return false;
 }
 
@@ -409,7 +445,7 @@ form.addEventListener("submit", async (e) => {
     return;
   }
 
-  setState(AppState.REQUESTING_CALLBACK);
+  transitionTo(AppState.REQUESTING_CALLBACK);
   setAction('requesting callback');
   log('info', 'Callback request submitted', { hasName: !!payload.name, hasEmail: !!payload.email, hasCaptcha: true });
 
@@ -447,7 +483,7 @@ form.addEventListener("submit", async (e) => {
       }
 
       showStatus('error', errorMessage);
-      setState(AppState.ERROR);
+      transitionTo(AppState.ERROR);
 
       // Reset reCAPTCHA on error so user can retry
       grecaptcha.reset();
@@ -455,7 +491,7 @@ form.addEventListener("submit", async (e) => {
   } catch (err) {
     log('error', 'Network error during callback request', { error: err.message });
     showStatus('error', 'Network error. Please check your connection and try again.');
-    setState(AppState.ERROR);
+    transitionTo(AppState.ERROR);
 
     // Reset reCAPTCHA on network error
     grecaptcha.reset();
@@ -567,7 +603,7 @@ async function verifyCode() {
 
   console.log('[AUTO-VERIFY DEBUG] Validation passed, proceeding with verification...');
 
-  setState(AppState.VERIFYING);
+  transitionTo(AppState.VERIFYING);
   setAction('verifying code');
 
   try {
@@ -619,7 +655,7 @@ async function verifyCode() {
       }
 
       showStatus('error', errorMessage);
-      setState(AppState.ERROR);
+      transitionTo(AppState.ERROR);
       verifyBtn.disabled = false;
       isVerifying = false; // Reset flag on error so user can retry
     }
@@ -633,7 +669,7 @@ async function verifyCode() {
 }
 
 async function initiateCallback(requestId) {
-  setState(AppState.CALLING);
+  transitionTo(AppState.CALLING);
   setAction('initiating callback');
 
   try {
@@ -650,7 +686,7 @@ async function initiateCallback(requestId) {
     if (data.success) {
       log('info', 'Callback initiated', { requestId });
       showStatus('success', '✓ Calling you now! Please answer your phone.');
-      setState(AppState.CONNECTED);
+      transitionTo(AppState.CONNECTED);
       hideVerificationUI();
 
       // Start polling for status updates
@@ -668,12 +704,12 @@ async function initiateCallback(requestId) {
       }
 
       showStatus('error', errorMessage);
-      setState(AppState.ERROR);
+      transitionTo(AppState.ERROR);
     }
   } catch (err) {
     log('error', 'Network error initiating callback', { error: err.message });
     showStatus('error', 'Network error. Please try again.');
-    setState(AppState.ERROR);
+    transitionTo(AppState.ERROR);
   }
 }
 

@@ -59,15 +59,47 @@ class AppState(str, Enum):
     DEGRADED = "degraded"
     SHUTTING_DOWN = "shutting_down"
 
+class ErrorTier(str, Enum):
+    """Error severity tiers for user-facing error classification"""
+    USER = "user"          # User-correctable errors (invalid input, etc.)
+    SYSTEM = "system"      # System-correctable errors (retry, reconnect, etc.)
+    OPERATOR = "operator"  # Operator-only errors (config, infrastructure, etc.)
+
+# FSM TRANSITION TABLE (Single Source of Truth)
+# Defines all legal state transitions - prevents drift and regressions
+ALLOWED_TRANSITIONS = {
+    AppState.STARTING: {AppState.READY, AppState.DEGRADED, AppState.SHUTTING_DOWN},
+    AppState.READY: {AppState.BUSY, AppState.SHUTTING_DOWN},
+    AppState.BUSY: {AppState.READY, AppState.DEGRADED, AppState.SHUTTING_DOWN},
+    AppState.DEGRADED: {AppState.READY, AppState.SHUTTING_DOWN},
+    AppState.SHUTTING_DOWN: set(),  # Terminal state - no transitions allowed
+}
+
 current_state = AppState.STARTING
 last_action = "initializing"
 
-def set_state(state: AppState):
-    """Set application state with logging"""
+def transition_to(new_state: AppState):
+    """
+    Transition to a new state with FSM enforcement.
+    This is the ONLY legal way to change application state.
+
+    Args:
+        new_state: The target state
+
+    Raises:
+        RuntimeError: If transition is not allowed by FSM
+    """
     global current_state
-    current_state = state
+
+    allowed = ALLOWED_TRANSITIONS.get(current_state, set())
+    if new_state not in allowed:
+        raise RuntimeError(
+            f"Invalid state transition: {current_state.value} → {new_state.value}"
+        )
+
     if VERBOSE:
-        logger.info(f"STATE → {state.value}")
+        logger.info(f"STATE: {current_state.value} → {new_state.value}")
+    current_state = new_state
 
 def set_action(action: str):
     """Track last action for crash reporting"""
@@ -94,25 +126,42 @@ def assert_state(expected_state: AppState, action_description: str):
         logger.error(error_msg)
         raise ValueError(error_msg)
 
-def error_response(error_message: str, status_code: int = 500, include_context: bool = True):
+def assert_ux_invariants():
     """
-    Create a standardized error response with optional context.
-    Includes last_action for user-visible failure context.
+    Assert UX invariants that must ALWAYS be true.
+    If any invariant is violated, execution stops immediately.
+    This prevents silent UX regressions.
+    """
+    assert current_state is not None, "UX invariant violated: State must always be defined"
+    assert isinstance(last_action, str), "UX invariant violated: last_action must always be a string"
+    assert current_state in AppState, f"UX invariant violated: Invalid state {current_state}"
+
+def error_response(error_message: str, tier: ErrorTier = ErrorTier.SYSTEM, status_code: int = 500,
+                   context: str = None, next_step: str = None):
+    """
+    Create a standardized, tier-aware error response.
+    Includes error classification to help users understand severity and responsibility.
 
     Args:
         error_message: The error message to display
+        tier: Error severity tier (USER, SYSTEM, or OPERATOR)
         status_code: HTTP status code
-        include_context: Whether to include last_action context
+        context: Optional context override (defaults to last_action)
+        next_step: Optional next step override
 
     Returns:
         tuple: (jsonify response, status_code)
     """
     response_data = {
         "success": False,
-        "error": error_message
+        "error": error_message,
+        "tier": tier.value
     }
 
-    if include_context and last_action:
+    # Add context (what was happening when error occurred)
+    if context:
+        response_data["context"] = context
+    elif last_action:
         # Make last_action human-readable
         action_phrases = {
             "initializing": "starting up",
@@ -123,7 +172,18 @@ def error_response(error_message: str, status_code: int = 500, include_context: 
         }
         human_action = action_phrases.get(last_action, last_action)
         response_data["context"] = f"Error occurred while {human_action}"
-        response_data["next_step"] = "Please try again or contact support if the problem persists"
+
+    # Add next step (what user should do)
+    if next_step:
+        response_data["next_step"] = next_step
+    else:
+        # Default next steps based on tier
+        if tier == ErrorTier.USER:
+            response_data["next_step"] = "Please check your input and try again."
+        elif tier == ErrorTier.SYSTEM:
+            response_data["next_step"] = "Please try again in a moment. If the problem persists, contact support."
+        elif tier == ErrorTier.OPERATOR:
+            response_data["next_step"] = "Please contact your system administrator."
 
     return jsonify(response_data), status_code
 
@@ -189,6 +249,18 @@ limiter = Limiter(
     default_limits=["200 per day", "50 per hour"],
     storage_uri="memory://"
 )
+
+# UX Invariants Check - runs before every request
+# Ensures UX guarantees are never violated
+@app.before_request
+def check_ux_invariants():
+    """Assert UX invariants before processing any request"""
+    try:
+        assert_ux_invariants()
+    except AssertionError as e:
+        logger.critical(f"UX invariant violation: {e}")
+        # Don't expose internal state to users
+        return jsonify({"success": False, "error": "Service temporarily unavailable"}), 503
 
 # Prometheus metrics collectors
 # Track callback requests by status
@@ -4416,7 +4488,7 @@ def graceful_shutdown(signum, frame):
     logger.warning("=" * 60)
     logger.warning(f"🛑 Received {signal_name}. Shutting down gracefully...")
     logger.warning("=" * 60)
-    set_state(AppState.SHUTTING_DOWN)
+    transition_to(AppState.SHUTTING_DOWN)
     shutdown_requested = True
 
     # Stop scheduler
@@ -4459,7 +4531,8 @@ if not QUIET:
 
 if __name__ == "__main__":
     try:
-        set_state(AppState.STARTING)
+        # Note: STARTING is initial state, no transition needed
+        # transition_to(AppState.STARTING) would fail since no transitions allowed TO starting
 
         # UX Directive #5: --quiet suppresses startup banners
         if not QUIET:
@@ -4472,7 +4545,7 @@ if __name__ == "__main__":
             logger.info(f"Log level: {'DEBUG' if VERBOSE else 'WARNING' if QUIET else 'INFO'}")
             logger.info("=" * 60)
 
-        set_state(AppState.READY)
+        transition_to(AppState.READY)
 
         # UX Directive #6: Announce state transition explicitly
         if not QUIET:
@@ -4484,7 +4557,7 @@ if __name__ == "__main__":
     except Exception as e:
         # UX Directive #3: Include last_action in crash reports
         logger.error(f"❌ Fatal error during {last_action}: {e}", exc_info=True)
-        set_state(AppState.DEGRADED)
+        transition_to(AppState.DEGRADED)
         sys.exit(ExitCode.RUNTIME_ERROR)
 
 
