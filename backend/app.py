@@ -254,13 +254,39 @@ limiter = Limiter(
 # Ensures UX guarantees are never violated
 @app.before_request
 def check_ux_invariants():
-    """Assert UX invariants before processing any request"""
+    """
+    Assert UX invariants before processing any request.
+
+    Provides structured logging and metrics for invariant failures
+    to help operators diagnose root cause without log archaeology.
+    """
     try:
         assert_ux_invariants()
     except AssertionError as e:
-        logger.critical(f"UX invariant violation: {e}")
-        # Don't expose internal state to users
-        return jsonify({"success": False, "error": "Service temporarily unavailable"}), 503
+        # Structured logging with context for operators
+        logger.critical(
+            "UX INVARIANT VIOLATION",
+            extra={
+                "error": str(e),
+                "current_state": current_state.value if current_state else "undefined",
+                "last_action": last_action,
+                "request_path": request.path,
+                "request_method": request.method,
+                "failure_type": "runtime_corruption" if current_state else "startup_failure"
+            }
+        )
+
+        # Increment failure metric for monitoring/alerting
+        failure_type = "runtime_corruption" if current_state else "startup_failure"
+        invariant_violations_total.labels(failure_type=failure_type).inc()
+
+        # Return user-friendly error (don't expose internal state)
+        return jsonify({
+            "success": False,
+            "error": "Service temporarily unavailable",
+            "tier": "operator",
+            "action": "contact_support"
+        }), 503
 
 # Prometheus metrics collectors
 # Track callback requests by status
@@ -282,6 +308,13 @@ callback_duration_seconds = Histogram(
     'callback_duration_seconds',
     'Callback request duration in seconds',
     ['status']
+)
+
+# Track UX invariant violations for monitoring/alerting
+invariant_violations_total = Counter(
+    'invariant_violations_total',
+    'Total UX invariant violations detected',
+    ['failure_type']
 )
 
 # Track Twilio calls

@@ -51,6 +51,19 @@ function transitionTo(nextState) {
   log('info', `STATE: ${currentAppState} → ${nextState}`);
   currentAppState = nextState;
   renderStateIndicator(nextState);
+
+  // Assert UX invariants after every state transition
+  // This catches any state-related invariant violations immediately
+  try {
+    assertUXInvariants();
+  } catch (err) {
+    // Fatal screen already shown by assertUXInvariants
+    log('error', '❌ UX invariant violation after state transition', {
+      from: currentAppState,
+      to: nextState,
+      error: err.message
+    });
+  }
 }
 
 function setAction(action) {
@@ -69,19 +82,105 @@ function assertState(expectedState, actionDescription) {
 }
 
 // Assert UX invariants that must ALWAYS be true
-// If any invariant is violated, execution stops immediately
+// Production-safe: shows fatal screen instead of white screen on violation
 function assertUXInvariants() {
-  if (!currentAppState) {
-    throw new Error('UX invariant violated: currentState is undefined');
+  try {
+    // Invariant 1: State must always be defined
+    if (!currentAppState) {
+      throw new Error('UX invariant violated: currentState is undefined');
+    }
+
+    // Invariant 2: State indicator must exist in DOM
+    if (!document.getElementById('app-state-indicator')) {
+      throw new Error('UX invariant violated: state indicator missing from DOM');
+    }
+
+    // Invariant 3: State must be valid
+    if (!Object.values(AppState).includes(currentAppState)) {
+      throw new Error(`UX invariant violated: Invalid state "${currentAppState}"`);
+    }
+  } catch (err) {
+    console.error('UX invariant failure:', err);
+    console.error('Stack trace:', err.stack);
+
+    // Show user-friendly fatal screen (production-safe)
+    showFatalScreen(
+      'The app encountered a fatal internal error. Please reload the page to continue.',
+      err
+    );
+
+    // Still throw for telemetry/monitoring
+    throw err;
+  }
+}
+
+// Show fatal error screen to user (production-safe invariant failure UX)
+function showFatalScreen(message, error = null) {
+  // Log the error for developers
+  if (error) {
+    console.error('FATAL ERROR:', error);
   }
 
-  if (!document.getElementById('app-state-indicator')) {
-    throw new Error('UX invariant violated: state indicator missing from DOM');
-  }
+  // Replace entire page with fatal error UI
+  document.body.innerHTML = `
+    <main style="
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 2rem;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      text-align: center;
+    ">
+      <div style="
+        background: rgba(255, 255, 255, 0.95);
+        color: #333;
+        padding: 3rem;
+        border-radius: 12px;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        max-width: 500px;
+      ">
+        <div style="font-size: 4rem; margin-bottom: 1rem;">⚠️</div>
+        <h1 style="margin: 0 0 1rem 0; font-size: 1.75rem; font-weight: 600;">
+          Something went wrong
+        </h1>
+        <p style="margin: 0 0 2rem 0; font-size: 1.1rem; line-height: 1.6; color: #666;">
+          ${escapeHtml(message)}
+        </p>
+        <button
+          onclick="location.reload()"
+          style="
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 0.875rem 2rem;
+            font-size: 1rem;
+            font-weight: 600;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background 0.2s;
+          "
+          onmouseover="this.style.background='#5568d3'"
+          onmouseout="this.style.background='#667eea'"
+        >
+          Reload Page
+        </button>
+        <p style="margin: 2rem 0 0 0; font-size: 0.875rem; color: #999;">
+          If this problem persists, please contact support.
+        </p>
+      </div>
+    </main>
+  `;
+}
 
-  if (!Object.values(AppState).includes(currentAppState)) {
-    throw new Error(`UX invariant violated: Invalid state "${currentAppState}"`);
-  }
+// Escape HTML to prevent XSS in error messages
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
 }
 
 // Render state indicator in UI (UX Directive #2: Make state user-visible)
@@ -367,6 +466,20 @@ function showStatus(type, message) {
   }
 
   log('info', `Status shown: ${type}`, { message });
+
+  // Assert UX invariants after every error render
+  // This catches any error-handling-related invariant violations
+  if (type === 'error') {
+    try {
+      assertUXInvariants();
+    } catch (err) {
+      // Fatal screen already shown by assertUXInvariants
+      log('error', '❌ UX invariant violation after error render', {
+        errorMessage: message,
+        invariantError: err.message
+      });
+    }
+  }
 }
 
 // Clear status
@@ -876,6 +989,16 @@ if (logoutBtn) {
     usingLocalBackend,
     authenticated: !!currentUser
   });
+
+  // Assert UX invariants after DOM is fully loaded and initialized
+  // This catches any initialization-time invariant violations
+  try {
+    assertUXInvariants();
+    log('info', '✅ UX invariants verified after initialization');
+  } catch (err) {
+    // Fatal screen already shown by assertUXInvariants
+    log('error', '❌ UX invariant violation during initialization', { error: err.message });
+  }
 })();
 
 // Settings Modal and Log Viewer
