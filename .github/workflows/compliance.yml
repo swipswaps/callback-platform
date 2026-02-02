@@ -1,0 +1,47 @@
+name: LLM Compliance Gate
+
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+
+jobs:
+  compliance:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install pyyaml
+
+      - name: Make scripts executable
+        run: |
+          chmod +x .augment/*.sh
+
+      - name: Run PTY health check
+        run: ./.augment/pty_health_check.sh
+
+      - name: Run compliance with evidence capture
+        env:
+          CI: "true"
+        run: |
+          .augment/run_with_evidence.sh \
+            .augment/watchdog.sh \
+            python3 .augment/validate_compliance.py
+
+      - name: Verify execution authority
+        run: python3 .augment/execution_gate.py
+
+      - name: Report results
+        if: always()
+        run: |
+          echo "✅ LLM compliance validation completed"
+          echo "If validation failed, merge is blocked until fixed"
+

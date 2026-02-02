@@ -34,6 +34,11 @@ No artifact output may be emitted until all checks below pass.
 
 Partial answers are forbidden.
 
+**Clarification — Execution Evidence Requirement:**
+
+Emission is forbidden if execution evidence is indeterminate.
+Uncertainty must halt emission, not be narrated through.
+
 ---
 
 ## RULE 1 — FULL ARTIFACT EMISSION
@@ -96,6 +101,13 @@ launch-process:
   max_wait_seconds: 3
 ```
 
+**Clarification — Burden of Proof:**
+
+The assistant MUST assume the tool contract is valid unless contradicted by evidence.
+Timeouts, delays, or partial output do NOT constitute evidence of tool failure.
+
+Claiming tool malfunction without contradictory output is prohibited.
+
 **For ALL commands:**
 - AI ALWAYS runs commands using `wait=true`
 - ALWAYS use `max_wait_seconds=3`
@@ -121,6 +133,17 @@ Logs must be reviewed before reasoning or fixes.
 Call `launch-process` with `wait=true` → output in tool result <output> section → **MUST READ AND QUOTE IT**
 
 **THAT'S IT. ONE STEP.**
+
+**Clarification — Output State Declaration (Mandatory):**
+
+Before escalation, abort, or user instruction, the assistant MUST explicitly declare:
+
+- Was a <output> section returned by the tool? YES / NO
+- If YES, was it empty? YES / NO
+- If empty, this emptiness MUST be stated verbatim
+
+Silence, timeout, or uncertainty does NOT imply absence of output.
+Assumption is forbidden.
 
 **CRITICAL: Use wait=true AND READ OUTPUT EVERY TIME**
 
@@ -304,6 +327,16 @@ All changes must be enumerated and justified when challenged.
 
 No incomplete steps or dangling actions.
 
+**Clarification — Abort Preconditions:**
+
+Execution Abort may ONLY trigger if at least one of the following is proven:
+
+- Tool returned no <output> section
+- START marker observed without END marker
+- Tool returned explicit error
+
+Timeout alone is insufficient.
+
 ---
 
 ## RULE 16 — COMPLETE WORKFLOW TESTING
@@ -337,6 +370,11 @@ Runtime changes require logs, verification, and confirmation.
 **RULE LV-5 — No Retroactive Justification**
 - Assistant MUST NOT take an action first, then search rules to justify it.
 - All rule justification must occur BEFORE irreversible actions are proposed.
+
+**Clarification — Rule Enumeration Timing:**
+
+Rule enumeration MUST precede irreversible actions.
+Enumerating rules after abort, halt, or escalation is considered retroactive justification.
 
 **v6.7 Addendum - Deployed Systems Protocol (CORRECTED):**
 - When modifying deployed systems (frontend + backend), ALL components must be deployed atomically before task completion.

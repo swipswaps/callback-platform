@@ -1,0 +1,176 @@
+---
+# Machine-Checkable Compliance Rubric
+# Version: 1.1
+# Mode: execution_and_verification
+# Created: 2026-02-01
+# Updated: 2026-02-02
+# Purpose: Enforce LLM compliance using cutting-edge best practices
+# Maps to: .augment/instructions.md and .augment/rules/mandatory-rules-v6.6.md
+
+rubric_version: "1.1"
+mode: execution_and_verification
+
+requirements:
+
+  repo_grounding:
+    description: >
+      All claims must be grounded in files that exist in the repository.
+      No assertions about code behavior without evidence from actual files.
+    enforce:
+      must_reference_existing_files: true
+      forbid_unverified_claims: true
+    severity: CRITICAL
+    maps_to_rules:
+      - RULE 7 (Evidence Before Assertion)
+      - RULE 9 (Mandatory Output Reading)
+
+  artifact_emission:
+    description: >
+      Suggestions are insufficient. Full working artifacts must be emitted.
+      No snippets-only, no conceptual-only output.
+    enforce:
+      forbid_snippets_only: true
+      require_full_files: true
+      forbid_conceptual_only_output: true
+    severity: CRITICAL
+    maps_to_rules:
+      - RULE 1 (Full Artifact Emission)
+      - RULE 2 (No Partial Compliance)
+
+  verification:
+    description: >
+      The system must prove it checked its own work.
+      Self-audit required before emission.
+    enforce:
+      require_self_audit: true
+      require_request_to_output_mapping: true
+    severity: MAJOR
+    maps_to_rules:
+      - RULE 13 (Self-Audit Before Emission)
+      - RULE 0 (Emission Gate)
+
+  assumptions:
+    description: >
+      Any assumption must be explicit and scoped.
+      No implicit assumptions allowed.
+    enforce:
+      require_assumption_declaration: true
+      forbid_implicit_assumptions: true
+    severity: MAJOR
+    maps_to_rules:
+      - RULE 11 (No Placeholders)
+      - RULE 7 (Evidence Before Assertion)
+
+  failure_modes:
+    description: >
+      The system must declare how changes fail safely.
+      Rollback mechanisms required for runtime operations.
+    enforce:
+      require_failure_mode_explanation: true
+    severity: MAJOR
+    maps_to_rules:
+      - RULE 18 (Fail-Safe & Rollback)
+
+  stop_conditions:
+    description: >
+      Partial compliance is not allowed.
+      Must halt on non-compliance, not emit partial answers.
+    enforce:
+      forbid_partial_answers: true
+      require_explicit_non_compliance_on_failure: true
+    severity: CRITICAL
+    maps_to_rules:
+      - RULE 0 (Emission Gate)
+      - RULE 2 (No Partial Compliance)
+      - RULE 15 (Zero-Hang Guarantee)
+
+  tool_name_accuracy:
+    description: >
+      Tool names must be verified before calling.
+      Hyphens vs underscores, capitalization must match exactly.
+    enforce:
+      verify_tool_names_before_calling: true
+    severity: CRITICAL
+    maps_to_rules:
+      - RULE 9B (Tool Name Accuracy)
+
+  output_reading:
+    description: >
+      All launch-process calls must read <output> section.
+      No ignoring output, no calling read-process after timeout.
+    enforce:
+      must_read_output_section: true
+      forbid_read_process_after_timeout: true
+    severity: CRITICAL
+    maps_to_rules:
+      - RULE 9 (Mandatory Output Reading)
+      - RULE 9A (Timeout Protocol)
+
+  file_editing:
+    description: >
+      Use str-replace-editor, not sed/awk/perl.
+      View file first to see actual characters.
+    enforce:
+      forbid_sed_awk_perl: true
+      require_view_before_edit: true
+    severity: CRITICAL
+    maps_to_rules:
+      - RULE 9C (File Editing with Corrupted Content)
+
+severity:
+  violation_levels:
+    CRITICAL:
+      action: fail
+      description: Immediate halt required, no emission allowed
+    MAJOR:
+      action: fail
+      description: High-risk violation, strict evidence required
+    MINOR:
+      action: warn
+      description: Deviation requires justification
+
+# Forbidden advisory language (triggers compliance failure)
+forbidden_phrases:
+  - "example snippet"
+  - "pseudo-code"
+  - "conceptually"
+  - "you could"
+  - "suggested improvement"
+  - "consider"
+  - "might want to"
+
+# Required self-audit markers
+required_markers:
+  - "Self-Audit"
+  - "Request → Artifact Mapping"
+  - "Assumption:"
+  - "Failure Mode"
+
+# File reference validation
+file_reference_patterns:
+  - "`([^`]+\\.(py|js|yml|yaml|md|json|txt|sh))`"
+  - "\\[([^\\]]+\\.(py|js|yml|yaml|md|json|txt|sh))\\]"
+
+# Enforcement hooks
+enforcement:
+  pre_emission_checks:
+    - repo_grounding
+    - artifact_emission
+    - verification
+    - assumptions
+    - failure_modes
+    - stop_conditions
+    - tool_name_accuracy
+    - output_reading
+    - file_editing
+
+  post_execution_checks:
+    - output_reading
+    - verification
+
+# Failure mode
+on_violation:
+  action: halt_emission
+  require_fix: true
+  log_violation: true
+

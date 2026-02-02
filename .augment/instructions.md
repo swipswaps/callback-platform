@@ -70,10 +70,19 @@ Tool returns output in <output> section - MUST READ IT AND QUOTE IT
 When launch-process returns timeout or <error>Cancelled by user.</error>:
 
 - **STEP 1:** Look for <output> section in the SAME tool result
-- **STEP 2:** If <output> exists → Quote it verbatim
-- **STEP 3:** If <output> is empty/missing → State "No output captured before timeout"
-- **STEP 4:** NEVER call read-process, list-processes, or read-terminal
-- **STEP 5:** If more info needed → Retry the command with wait=true
+- **STEP 2:** **ASSERT OUTPUT PRESENCE EXPLICITLY:**
+  - "<output> section exists: YES / NO"
+  - "<output> length > 0: YES / NO"
+- **STEP 3:** If <output> exists → Quote it verbatim
+- **STEP 4:** If <output> is empty/missing → State "No output captured before timeout"
+- **STEP 5:** NEVER call read-process, list-processes, or read-terminal
+- **STEP 6:** If more info needed → Retry the command with wait=true
+
+**CRITICAL CLARIFICATION:**
+- **Timeout ≠ No Output** - These are independent conditions
+- Timeout means max_wait_seconds exceeded
+- Output may still exist in <output> section
+- **MUST check <output> section even after timeout**
 
 **FORBIDDEN:** Calling read-process "to check what was captured" - output is in tool result
 
@@ -81,6 +90,8 @@ When launch-process returns timeout or <error>Cancelled by user.</error>:
 ❌ Ignoring <output> section when it exists
 ❌ Saying "OK" without reading output
 ❌ Saying "the command timed out" without reading partial output
+❌ **NEW:** Saying "the command timed out" without asserting output presence
+❌ **NEW:** Assuming timeout means no output (must check <output> section)
 ❌ Assuming failure without checking output
 ❌ Using wait=false (creates hidden terminals user can't see)
 ❌ Calling read-process (AI-only hidden tool - user can't see output)
@@ -397,6 +408,36 @@ An assistant MUST NOT:
 
 ---
 
+### RULE LV-6 — Tool Contract Trust (NEW)
+
+**The assistant MUST trust documented tool guarantees over inferred system state.**
+
+**Tool Contract:**
+- `launch-process` with `wait=true` returns output in <output> section
+- This is a documented guarantee, not a best-effort behavior
+- Speculation about tool malfunction is forbidden without contradictory evidence
+
+**Forbidden:**
+- ❌ "The tool might have failed to capture output"
+- ❌ "PTY might be broken"
+- ❌ "Terminal might be unresponsive"
+- ❌ Escalating to Execution Abort without checking <output> section
+
+**Required:**
+- ✅ Check <output> section first
+- ✅ Assert output presence explicitly
+- ✅ Only escalate if <output> is proven empty or contradictory
+
+**Rationale:**
+- Tool contracts are the foundation of automation
+- Speculation about tool failure creates false alarms
+- User-visible terminal activity does NOT override tool output
+- `launch-process` is the source of truth for command execution
+
+**This prevents premature escalation and false positives.**
+
+---
+
 ## 🚀 DEPLOYED SYSTEMS PROTOCOL (v6.7)
 
 **CRITICAL: When modifying deployed systems, deployment is PART OF THE TASK, not optional.**
@@ -459,6 +500,82 @@ If a request involves deployment, propagation, freshness, or updates:
   prefer user clarity over automation.
 
 Failure to apply this rule is a blocking error.
+
+---
+
+## 🛑 EXECUTION ABORT PROTOCOL (HARD STOP)
+
+**When execution environment is compromised, HALT immediately.**
+
+### Detection Criteria (HARDENED)
+
+Execution Abort requires **at least one** of the following **PROOFS**:
+
+1. **Empty <output> confirmed** - <output> section exists but length = 0
+2. **Echo markers missing** - START: marker exists but END: marker missing in <output>
+3. **Tool error + empty output** - Tool returns error AND <output> is empty
+4. **User-visible terminal contradicts tool** - User shows terminal output that contradicts tool result
+
+**INSUFFICIENT for Execution Abort:**
+- ❌ Timeout alone (must check <output> section first)
+- ❌ "Commands stop producing output" (must assert <output> presence)
+- ❌ "PTY appears unresponsive" (must check <output> section)
+- ❌ Speculation about tool malfunction (must have contradictory evidence)
+
+**CRITICAL:** Timeout is a symptom, not a proof. Always check <output> section.
+
+### Mandatory Response
+
+**STOP immediately. Do NOT:**
+- ❌ Continue with task narration
+- ❌ Make completion claims
+- ❌ Attempt workarounds
+- ❌ Guess at state
+
+**MUST:**
+- ✅ State explicitly: "Execution environment is compromised. Halting."
+- ✅ List evidence of compromise (which commands failed, what output was missing)
+- ✅ Request user intervention
+- ✅ Do NOT emit any artifacts or completion claims
+
+### Rationale
+
+When execution fidelity is lost, all subsequent claims are unverifiable. Continuing creates false confidence and wastes user time. The correct action is immediate halt with evidence.
+
+**This is a HARD STOP. No exceptions.**
+
+---
+
+## 🔒 EXECUTION ABORT PROTOCOL (MACHINE-CHECKABLE)
+
+**Mechanical enforcement of execution authority.**
+
+### Rule
+
+If any command:
+- Produces no observable output
+- Times out
+- Cannot be verified via artifacts in `.augment/evidence/`
+
+THEN:
+
+1. ❌ No additional files may be edited
+2. ❌ No success claims may be made
+3. ❌ Rule enumeration must be marked INDETERMINATE
+4. ❌ No completion assertions allowed
+5. ✅ Execution evidence must be requested
+6. ✅ Process must HALT immediately
+
+### Enforcement
+
+Validator checks for execution evidence before running:
+- `.augment/evidence/git_status.txt` must exist
+- `.augment/evidence/command_output.txt` must exist
+- If missing → exit code 42 (authority revoked)
+
+### Violation Severity
+
+**CRITICAL FAILURE** - Blocks all state advancement.
 
 ---
 
